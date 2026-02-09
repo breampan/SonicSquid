@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>西索的假象：聲響實驗室 (純淨穩定版)</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #020812;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            user-select: none;
+        }
+
+        canvas {
+            display: block;
+            touch-action: none;
+        }
+
+        /* UI 控制介面容器 */
+        #controls {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            align-items: center;
+            z-index: 100;
+            width: 95%;
+            max-width: 500px;
+        }
+
+        .control-group {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(15px);
+            padding: 8px;
+            border-radius: 20px;
+            display: flex;
+            gap: 6px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            width: 100%;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        button {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(100, 220, 255, 0.3);
+            color: #fff;
+            padding: 8px 12px;
+            border-radius: 12px;
+            cursor: pointer;
+            font-size: 11px;
+            transition: all 0.3s ease;
+            flex: 1;
+            min-width: 80px;
+            white-space: nowrap;
+        }
+
+        button.active {
+            background: rgba(100, 220, 255, 0.4);
+            border-color: #64dcff;
+            box-shadow: 0 0 15px rgba(100, 220, 255, 0.3);
+        }
+
+        #ui-overlay {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: rgba(100, 220, 255, 0.5);
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        .instruction {
+            font-size: 14px;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+        }
+
+        ::-webkit-scrollbar { display: none; }
+    </style>
+</head>
+<body>
+
+    <div id="ui-overlay">
+        <div class="instruction">再生生態：純淨音訊邏輯優化版</div>
+    </div>
+
+    <div id="controls">
+        <div class="control-group" id="waveform-group">
+            <button onclick="setWaveform('sine')" id="btn-sine" class="active">正弦波</button>
+            <button onclick="setWaveform('triangle')" id="btn-triangle">三角波</button>
+            <button onclick="setWaveform('noise')" id="btn-noise">噪音 (Airseed)</button>
+            <button onclick="setWaveform('boatman')" id="btn-boatman">劃蝽 (脈衝)</button>
+        </div>
+        <div class="control-group">
+            <button onclick="toggleAM()" id="btn-am">振幅調變 (AM) : 關</button>
+        </div>
+    </div>
+
+    <canvas id="aquariumCanvas"></canvas>
+
+    <script>
+        /**
+         * 數位水族互動底座 - 修復版
+         * 重點修復：啟動瞬間的 Glitch/Pop 雜音，優化封筒平滑度
+         */
+
+        const canvas = document.getElementById('aquariumCanvas');
+        const ctx = canvas.getContext('2d');
+
+        let width, height;
+        let particles = [];
+        let activeFocusParticle = null; 
+        let ripples = [];
+        let mouse = { x: -1000, y: -1000, active: false };
+
+        const settings = {
+            waveform: 'sine',
+            useAM: false
+        };
+
+        let audioCtx;
+        let noiseBuffer;
+        let ambientGain;
+
+        const initAudio = () => {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const listener = audioCtx.listener;
+                if (listener.positionX) {
+                    listener.positionX.value = 0; listener.positionY.value = 0; listener.positionZ.value = 0;
+                    listener.forwardX.value = 0; listener.forwardY.value = 0; listener.forwardZ.value = -1;
+                } else {
+                    listener.setPosition(0, 0, 0);
+                    listener.setOrientation(0, 0, -1, 0, 1, 0);
+                }
+                createNoiseBuffer();
+                setupAmbientSound();
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        };
+
+        function createNoiseBuffer() {
+            const bufferSize = audioCtx.sampleRate * 2;
+            noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+            const output = noiseBuffer.getChannelData(0);
+            for (let i = 0; i < bufferSize; i++) {
+                output[i] = Math.random() * 2 - 1;
+            }
+        }
+
+        function setupAmbientSound() {
+            ambientGain = audioCtx.createGain();
+            ambientGain.gain.value = 0.02; 
+            ambientGain.connect(audioCtx.destination);
+            const lowOsc = audioCtx.createOscillator();
+            lowOsc.type = 'sine';
+            lowOsc.frequency.value = 45; 
+            lowOsc.connect(ambientGain);
+            lowOsc.start();
+        }
+
+        const MAX_BG_PARTICLES = 90;
+        const FRICTION = 0.96;
+
+        class Particle {
+            constructor(type = 'background', startX, startY) {
+                this.type = type; 
+                this.init(startX, startY);
+            }
+
+            init(startX, startY) {
+                this.x = startX !== undefined ? startX : Math.random() * width;
+                this.y = startY !== undefined ? startY : Math.random() * height;
+                this.vx = (Math.random() - 0.5) * 1.5;
+                this.vy = (Math.random() - 0.5) * 1.5;
+                this.accX = 0; this.accY = 0;
+                
+                if (this.type === 'focus') {
+                    this.radius = 6; this.life = 1.0; this.decay = 0.003;
+                    this.updateColor();
+                } else if (this.type === 'supporting') {
+                    this.radius = 2.5 + Math.random() * 2;
+                    this.rgb = '120, 220, 255';
+                    this.pulse = Math.random() * Math.PI;
+                    this.life = 1.0; this.decay = 0.0015;
+                    this.curiosity = 0.06 + Math.random() * 0.06;
+                } else {
+                    this.radius = 1.2 + Math.random() * 1.5;
+                    this.rgb = '80, 160, 255';
+                    this.life = 1.0; this.decay = 0.0015;
+                    this.curiosity = 0.02 + Math.random() * 0.04;
+                }
+                this.isDead = false;
+                this.history = []; 
+
+                this.source = null;
+                this.gain = null;
+                this.shooFilter = null;
+                this.panner = null;
+                this.lfo = null;
+
+                if (this.type === 'focus' && audioCtx && mouse.active) {
+                    this.playShooSound();
+                }
+            }
+
+            updateColor() {
+                if (this.type !== 'focus') return;
+                if (settings.waveform === 'noise') this.rgb = '160, 255, 170';
+                else if (settings.waveform === 'triangle') this.rgb = '255, 204, 170';
+                else if (settings.waveform === 'boatman') this.rgb = '255, 85, 68';
+                else this.rgb = '255, 255, 255';
+            }
+
+            cleanupSound(fadeTime = 0.1) {
+                if (!audioCtx) return;
+                const now = audioCtx.currentTime;
+                if (this.gain) {
+                    // 使用平滑的淡出防止爆音
+                    this.gain.gain.cancelScheduledValues(now);
+                    this.gain.gain.setValueAtTime(this.gain.gain.value, now);
+                    this.gain.gain.exponentialRampToValueAtTime(0.0001, now + fadeTime);
+                }
+                
+                const currentSource = this.source;
+                const currentLfo = this.lfo;
+                
+                setTimeout(() => {
+                    if (currentSource) try { currentSource.stop(); currentSource.disconnect(); } catch(e) {}
+                    if (currentLfo) try { currentLfo.stop(); currentLfo.disconnect(); } catch(e) {}
+                }, (fadeTime + 0.05) * 1000);
+                
+                this.source = null;
+                this.lfo = null;
+            }
+
+            playShooSound() {
+                if (!audioCtx) return;
+                this.cleanupSound(0.05); // 快速清理
+
+                const now = audioCtx.currentTime + 0.01; // 加入微小排程緩衝防止 Glitch
+                this.gain = audioCtx.createGain();
+                this.shooFilter = audioCtx.createBiquadFilter();
+                this.panner = audioCtx.createPanner();
+                this.panner.panningModel = 'HRTF';
+                this.panner.distanceModel = 'inverse';
+                this.updatePannerPosition();
+
+                if (settings.waveform === 'noise') {
+                    this.source = audioCtx.createBufferSource();
+                    this.source.buffer = noiseBuffer;
+                    this.source.loop = true;
+                    this.shooFilter.type = 'bandpass';
+                    this.shooFilter.Q.value = 10;
+                    this.source.connect(this.shooFilter);
+                } else if (settings.waveform === 'boatman') {
+                    this.source = audioCtx.createOscillator();
+                    this.source.type = 'sawtooth';
+                    this.source.frequency.value = 3800; 
+                    this.shooFilter.type = 'allpass'; 
+                    this.pulseGain = audioCtx.createGain();
+                    const pulseSpeed = 15;
+                    for (let i = 0; i < 200; i++) {
+                        const t = now + i / pulseSpeed;
+                        this.pulseGain.gain.setValueAtTime(0.0001, t);
+                        this.pulseGain.gain.exponentialRampToValueAtTime(1.0, t + 0.005);
+                        this.pulseGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.04);
+                    }
+                    this.source.connect(this.pulseGain);
+                    this.pulseGain.connect(this.shooFilter);
+                } else {
+                    this.source = audioCtx.createOscillator();
+                    this.source.type = settings.waveform;
+                    this.shooFilter.type = 'lowpass';
+                    this.shooFilter.frequency.value = 8000; 
+                    this.source.connect(this.shooFilter);
+                }
+
+                if (settings.useAM) {
+                    this.lfo = audioCtx.createOscillator();
+                    const lfoGainNode = audioCtx.createGain();
+                    this.lfo.frequency.value = 14; 
+                    lfoGainNode.gain.value = 0.6;
+                    this.lfo.connect(lfoGainNode);
+                    lfoGainNode.connect(this.gain.gain);
+                    this.lfo.start(now);
+                }
+
+                // 防止 Pop：從極小值平滑淡入
+                this.gain.gain.setValueAtTime(0.0001, now);
+                const baseGainVal = settings.waveform === 'boatman' ? 0.4 : (settings.waveform === 'sine' ? 0.22 : 0.28);
+                this.gain.gain.exponentialRampToValueAtTime(baseGainVal, now + 0.15);
+                
+                this.shooFilter.connect(this.panner);
+                this.panner.connect(this.gain);
+                this.gain.connect(audioCtx.destination);
+                
+                this.source.start(now);
+            }
+
+            updatePannerPosition() {
+                if (!this.panner || !audioCtx) return;
+                const now = audioCtx.currentTime;
+                const posX = (this.x / width) * 4 - 2; 
+                const posY = -(this.y / height) * 2 + 1;
+                const posZ = 0.4;
+                if (this.panner.positionX) {
+                    this.panner.positionX.setTargetAtTime(posX, now, 0.05);
+                    this.panner.positionY.setTargetAtTime(posY, now, 0.05);
+                    this.panner.positionZ.setTargetAtTime(posZ, now, 0.05);
+                } else {
+                    this.panner.setPosition(posX, posY, posZ);
+                }
+            }
+
+            stopShooSound() {
+                this.cleanupSound(0.2); // 正常淡出
+            }
+
+            playBubblePopSound() {
+                if (!audioCtx) return;
+                const now = audioCtx.currentTime + 0.005;
+                const osc = audioCtx.createOscillator();
+                const popGain = audioCtx.createGain();
+                const popFilter = audioCtx.createBiquadFilter();
+                const panner = audioCtx.createPanner();
+                panner.panningModel = 'HRTF';
+                panner.setPosition((this.x / width) * 2 - 1, -(this.y / height) * 2 + 1, 0.5);
+                
+                osc.type = 'sine';
+                const popFreq = 1800 + Math.random() * 400; 
+                osc.frequency.setValueAtTime(popFreq, now);
+                osc.frequency.exponentialRampToValueAtTime(400, now + 0.1);
+                
+                popFilter.type = 'bandpass';
+                popFilter.frequency.setValueAtTime(popFreq, now);
+                popFilter.Q.value = 25; 
+
+                // 極速淡入淡出封筒防止 Glitch
+                popGain.gain.setValueAtTime(0.0001, now);
+                popGain.gain.exponentialRampToValueAtTime(0.4, now + 0.01); 
+                popGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.15); 
+
+                osc.connect(popFilter); popFilter.connect(panner); panner.connect(popGain);
+                popGain.connect(audioCtx.destination);
+                osc.start(now);
+                osc.stop(now + 0.2);
+            }
+
+            update() {
+                if (mouse.active) {
+                    let dx = mouse.x - this.x;
+                    let dy = mouse.y - this.y;
+                    let dist = Math.sqrt(dx * dx + dy * dy);
+                    let pull = (this.type === 'focus') ? 0.45 : this.curiosity;
+                    if (dist > 1) {
+                        this.accX += (dx / dist) * pull;
+                        this.accY += (dy / dist) * pull;
+                    }
+
+                    if (this.type === 'focus' && audioCtx && this.gain) {
+                        const now = audioCtx.currentTime;
+                        this.updatePannerPosition();
+                        
+                        const centerX = width / 2;
+                        const distFromCenter = Math.abs(this.x - centerX);
+                        const proximityFactor = Math.pow(Math.max(0, 1 - distFromCenter / (width / 2)), 2);
+
+                        const baseGainVal = settings.waveform === 'boatman' ? 0.4 : (settings.waveform === 'sine' ? 0.22 : 0.28);
+                        const boostFactor = settings.waveform === 'sine' ? 0.4 : 0.6;
+                        const dynamicGain = Math.max(0.001, baseGainVal * (0.6 + proximityFactor * boostFactor));
+                        
+                        // 使用 setTargetAtTime 讓增益變化更平滑
+                        this.gain.gain.setTargetAtTime(dynamicGain, now, 0.05);
+
+                        if (this.source) {
+                            const heightRatio = Math.max(0, Math.min(1, 1 - (this.y / height)));
+                            const baseFreq = settings.waveform === 'noise' ? 300 + heightRatio * 2000 : 180 + heightRatio * 1000;
+                            
+                            if (settings.waveform === 'noise') {
+                                const targetFilterFreq = baseFreq + (proximityFactor * 2800); 
+                                this.shooFilter.frequency.setTargetAtTime(targetFilterFreq, now, 0.05);
+                            } else if (settings.waveform !== 'boatman' && this.source.frequency) {
+                                const dopplerShift = 1.0 + (proximityFactor * 0.1); 
+                                this.source.frequency.setTargetAtTime(baseFreq * dopplerShift, now, 0.08);
+                                this.shooFilter.frequency.setTargetAtTime(8000, now, 0.1);
+                            }
+                        }
+                        
+                        if (dist < 35) {
+                            this.isDead = true; 
+                            this.cleanupSound(0.05); 
+                            this.playBubblePopSound();
+                            ripples.push(new Ripple(this.x, this.y, true));
+                        }
+                    }
+                }
+
+                this.life -= this.decay;
+                if (this.life <= 0) {
+                    this.isDead = true;
+                    if (this.type === 'focus') { this.cleanupSound(0.1); this.playBubblePopSound(); }
+                }
+
+                if (this.type === 'focus') {
+                    this.history.push({x: this.x, y: this.y});
+                    if (this.history.length > 25) this.history.shift();
+                } else if (this.type === 'supporting') {
+                    this.pulse += 0.06;
+                }
+
+                this.vx += this.accX; this.vy += this.accY;
+                this.vx *= FRICTION; this.vy *= FRICTION;
+                this.x += this.vx; this.y += this.vy;
+                this.accX = 0; this.accY = 0;
+                if (this.x < -100 || this.x > width + 100 || this.y < -100 || this.y > height + 100) this.isDead = true;
+            }
+
+            draw() {
+                if (this.type === 'focus') {
+                    ctx.beginPath();
+                    if(this.history.length > 0) {
+                        ctx.moveTo(this.history[0].x, this.history[0].y);
+                        for(let i=1; i<this.history.length; i++) ctx.lineTo(this.history[i].x, this.history[i].y);
+                    }
+                    ctx.strokeStyle = `rgba(160, 240, 255, ${this.life * 0.4})`;
+                    ctx.lineWidth = 3; ctx.stroke();
+                    const grad = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.radius * 6);
+                    grad.addColorStop(0, `rgba(${this.rgb}, ${this.life})`);
+                    grad.addColorStop(0.3, `rgba(100, 230, 255, ${this.life * 0.7})`);
+                    grad.addColorStop(1, 'transparent');
+                    ctx.fillStyle = grad;
+                } else if (this.type === 'supporting') {
+                    const sAlpha = (0.5 + Math.sin(this.pulse) * 0.3) * this.life;
+                    const grad = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.radius * 4);
+                    grad.addColorStop(0, `rgba(${this.rgb}, ${sAlpha})`);
+                    grad.addColorStop(1, 'transparent');
+                    ctx.fillStyle = grad;
+                } else {
+                    const bAlpha = this.life * 0.45;
+                    const bGrad = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.radius * 3);
+                    bGrad.addColorStop(0, `rgba(100, 180, 255, ${bAlpha})`);
+                    bGrad.addColorStop(1, 'transparent');
+                    ctx.fillStyle = bGrad;
+                }
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius * (this.type === 'supporting' ? 1.8 : 1.2), 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        function playTinyEnvironmentPop(x, y) {
+            if (!audioCtx) return;
+            const now = audioCtx.currentTime + 0.005;
+            const osc = audioCtx.createOscillator();
+            const g = audioCtx.createGain();
+            const panner = audioCtx.createPanner();
+            panner.panningModel = 'HRTF';
+            panner.setPosition((x/width)*2-1, -(y/height)*2+1, 0.8);
+            
+            osc.frequency.setValueAtTime(900 + Math.random() * 600, now);
+            osc.frequency.exponentialRampToValueAtTime(300, now + 0.05);
+            
+            g.gain.setValueAtTime(0.0001, now); 
+            g.gain.exponentialRampToValueAtTime(0.008, now + 0.01);
+            g.gain.exponentialRampToValueAtTime(0.0001, now + 0.06);
+            
+            osc.connect(panner); panner.connect(g); g.connect(audioCtx.destination);
+            osc.start(now); osc.stop(now + 0.1);
+        }
+
+        class Ripple {
+            constructor(x, y, isBurst = false) {
+                this.x = x; this.y = y; this.r = 0; this.life = 1.0; this.isBurst = isBurst;
+            }
+            update() { this.r += this.isBurst ? 10 : 2; this.life -= 0.025; }
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.r, 0, Math.PI * 2);
+                ctx.strokeStyle = `rgba(255, 255, 255, ${this.life * (this.isBurst ? 0.9 : 0.2)})`;
+                ctx.lineWidth = this.isBurst ? 4 : 1;
+                ctx.stroke();
+            }
+        }
+
+        window.setWaveform = (type) => {
+            initAudio();
+            settings.waveform = type;
+            document.querySelectorAll('#waveform-group button').forEach(btn => btn.classList.remove('active'));
+            document.getElementById('btn-' + type).classList.add('active');
+            if (activeFocusParticle && mouse.active) activeFocusParticle.playShooSound();
+        };
+
+        window.toggleAM = () => {
+            initAudio();
+            settings.useAM = !settings.useAM;
+            document.getElementById('btn-am').classList.toggle('active', settings.useAM);
+            document.getElementById('btn-am').textContent = `振幅調變 (AM) : ${settings.useAM ? '開' : '關'}`;
+            if (activeFocusParticle && mouse.active) activeFocusParticle.playShooSound();
+        };
+
+        function resize() {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+        }
+
+        function getEdgePos() {
+            const side = Math.floor(Math.random() * 4);
+            if (side === 0) return { x: -50, y: Math.random() * height };
+            if (side === 1) return { x: width + 50, y: Math.random() * height };
+            if (side === 2) return { x: Math.random() * width, y: -50 };
+            return { x: Math.random() * width, y: height + 50 };
+        }
+
+        function animate() {
+            ctx.fillStyle = 'rgba(2, 8, 18, 0.35)';
+            ctx.fillRect(0, 0, width, height);
+
+            for (let i = ripples.length - 1; i >= 0; i--) {
+                ripples[i].update(); ripples[i].draw();
+                if (ripples[i].life <= 0) ripples.splice(i, 1);
+            }
+
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i]; p.update(); p.draw();
+                if (p.isDead) particles.splice(i, 1);
+            }
+
+            if (particles.length < MAX_BG_PARTICLES) {
+                const pos = getEdgePos();
+                particles.push(new Particle((Math.random() < 0.25) ? 'supporting' : 'background', pos.x, pos.y));
+            }
+
+            if (activeFocusParticle) {
+                activeFocusParticle.update(); activeFocusParticle.draw();
+                if (activeFocusParticle.isDead) activeFocusParticle = null;
+            } else if (mouse.active && Math.random() < 0.04) {
+                const pos = getEdgePos();
+                activeFocusParticle = new Particle('focus', pos.x, pos.y);
+            }
+
+            if (Math.random() < 0.0006 && audioCtx) {
+                playTinyEnvironmentPop(Math.random() * width, Math.random() * height);
+            }
+            requestAnimationFrame(animate);
+        }
+
+        const handleDown = (e) => {
+            if (e.target.tagName === 'BUTTON') return;
+            initAudio(); mouse.active = true;
+            const x = (e.touches ? e.touches[0].clientX : e.clientX);
+            const y = (e.touches ? e.touches[0].clientY : e.clientY);
+            mouse.x = x; mouse.y = y;
+            ripples.push(new Ripple(mouse.x, mouse.y));
+            if (activeFocusParticle && !activeFocusParticle.isDead) activeFocusParticle.playShooSound();
+        };
+
+        const updateMouse = (e) => {
+            const x = (e.touches ? e.touches[0].clientX : e.clientX);
+            const y = (e.touches ? e.touches[0].clientY : e.clientY);
+            mouse.x = x; mouse.y = y;
+        };
+
+        const handleUp = () => { 
+            mouse.active = false; 
+            if (activeFocusParticle) activeFocusParticle.stopShooSound(); 
+        };
+
+        window.addEventListener('mousedown', handleDown);
+        window.addEventListener('mousemove', (e) => { if (mouse.active) updateMouse(e); });
+        window.addEventListener('mouseup', handleUp);
+        window.addEventListener('touchstart', (e) => { if (e.target.tagName !== 'BUTTON') { e.preventDefault(); handleDown(e); } }, { passive: false });
+        window.addEventListener('touchmove', (e) => { if (mouse.active) updateMouse(e); }, { passive: false });
+        window.addEventListener('touchend', handleUp);
+        window.addEventListener('resize', resize);
+        resize(); animate();
+    </script>
+</body>
+</html>
