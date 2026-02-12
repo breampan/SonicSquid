@@ -47,8 +47,10 @@
         };
 
         const App = () => {
-            // 切換至更強制的嵌入路徑格式
-            const [rawUrl] = useState('https://www.notion.so/embed/2ea4f4d665ce8077ab37fef4b6b31ef2');
+            // 直接使用使用者提供的嵌入碼 URL，這是目前最有可能成功的格式
+            const [embedUrl] = useState('https://curly-ketch-268.notion.site/ebd/2ea4f4d665ce8077ab37fef4b6b31ef2');
+            // 原始閱讀連結，用於手動開啟
+            const [readingUrl] = useState('https://curly-ketch-268.notion.site/Merry-Sound-Design-2ea4f4d665ce8077ab37fef4b6b31ef2');
             const [activeTab, setActiveTab] = useState('theory');
 
             const insights = [
@@ -92,12 +94,12 @@
 
                     <main className="max-w-7xl mx-auto px-6 py-12 grid grid-cols-1 lg:grid-cols-12 gap-12">
                         <div className="lg:col-span-4 space-y-6">
-                            <div className="bg-blue-50 border border-blue-200 p-5 rounded-2xl flex gap-3">
+                            <div className="bg-blue-50 border border-blue-200 p-5 rounded-2xl flex gap-3 shadow-sm">
                                 <Icon name="info" className="w-5 h-5 text-blue-600 shrink-0" />
                                 <div>
-                                    <p className="text-xs font-bold text-blue-800 uppercase mb-1">嵌入狀態確認</p>
+                                    <p className="text-xs font-bold text-blue-800 uppercase mb-1">關於內容呈現</p>
                                     <p className="text-[11px] text-blue-700 leading-relaxed">
-                                        如果右側仍然顯示空白，請務必確認您的 Notion 頁面點擊了 <b>「Share」→「Publish」→「Publish to web」</b>。這與一般的「邀請連結」不同，是嵌入成功的唯一條件。
+                                        雖然已「Publish to web」，但部分瀏覽器基於隱私權設定仍會阻擋 Notion 嵌入。若右側顯示空白，請點擊下方的藍色按鈕手動開啟。
                                     </p>
                                 </div>
                             </div>
@@ -152,22 +154,30 @@
                                 <div className="flex justify-between items-end px-2">
                                     <div>
                                         <h2 className="text-lg font-bold">Merry Sound Design 實作成果</h2>
-                                        <p className="text-xs text-neutral-400 italic">正在透過 Notion 官方嵌入接口載入...</p>
+                                        <p className="text-xs text-neutral-400 italic">若無法預覽，請點擊右側連結手動開啟</p>
                                     </div>
-                                    <a href="https://curly-ketch-268.notion.site/Merry-Sound-Design-2ea4f4d665ce8077ab37fef4b6b31ef2" target="_blank" className="flex items-center gap-1.5 text-xs text-blue-600 font-medium hover:underline">
-                                        在新分頁中打開 Notion <Icon name="external-link" className="w-3 h-3" />
-                                    </a>
+                                    <div className="flex gap-4">
+                                        <a href={readingUrl} target="_blank" className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-full text-xs font-bold hover:bg-blue-700 transition shadow-lg shadow-blue-200">
+                                            <Icon name="external-link" className="w-3 h-3" /> 手動開啟音檔清單
+                                        </a>
+                                    </div>
                                 </div>
                                 
                                 <div className="notion-container w-full bg-white rounded-3xl border border-neutral-200 shadow-2xl overflow-hidden min-h-[850px] relative">
-                                    {/* 背景 Loading 提示 */}
-                                    <div className="absolute inset-0 flex flex-col items-center justify-center -z-10 bg-neutral-50">
+                                    {/* 背景 Fallback 提示 */}
+                                    <div className="absolute inset-0 flex flex-col items-center justify-center -z-10 bg-neutral-50 p-10 text-center">
                                         <Icon name="loader-2" className="w-10 h-10 text-blue-200 animate-spin mb-4" />
-                                        <p className="text-neutral-400 text-sm animate-pulse-slow">內容即將呈現，請稍候...</p>
+                                        <h3 className="text-neutral-800 font-bold mb-2">正在載入 Notion 嵌入內容...</h3>
+                                        <p className="text-neutral-400 text-sm max-w-sm mb-6">
+                                            如果長時間顯示此畫面或出現「拒絕連接」，代表您的瀏覽器限制了 Notion 的直接嵌入。
+                                        </p>
+                                        <a href={readingUrl} target="_blank" className="text-blue-600 text-sm font-bold border-b border-blue-600 pb-0.5 hover:text-blue-800 transition">
+                                            點此於新分頁查看完整內容
+                                        </a>
                                     </div>
 
                                     <iframe
-                                        src={rawUrl}
+                                        src={embedUrl}
                                         width="100%"
                                         height="850px"
                                         frameBorder="0"
