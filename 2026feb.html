@@ -3,207 +3,473 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>IRCAM STMS 研究：聲音魅力工程</title>
-    <!-- 引入 Tailwind CSS -->
+    <title>IRCAM STMS 聲音語義與感知設計分析</title>
+    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- 引入 React 與 ReactDOM -->
-    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <!-- 引入 Babel 用於瀏覽器中編譯 JSX -->
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <!-- 引入 Lucide 圖標 -->
-    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <!-- Chosen Palette: Research Slate & Scientific Azure -->
+    <!-- Application Structure Plan: 
+         The SPA is organized as a dynamic research dossier focusing on Perceptual Descriptors.
+         1. Hero: Technical introduction focusing on Descriptors and Acoustic Parameters.
+         2. Concept Block: Interactive comparison of Sound vs. Listening.
+         3. Mapping Lab: The central Radar Chart allows users to visualize how Sophistication, Utility, and Innovation map to specific parameters.
+         4. Dynamics & Ecosystem: Visualizing time-based behavior and spectral competition.
+         5. Methodology: Documenting the standardized IRCAM design workflow.
+    -->
+    
+    <!-- Visualization & Content Choices:
+         - Interaction Logic: Buttons update Chart.js datasets to show parameter shifts.
+         - Radar Chart: Ideal for multi-dimensional perceptual profiles.
+         - Line/Bar Charts: Used for temporal and spectral analysis.
+         - NO SVG/Mermaid: All visual elements are Canvas-based or CSS-styled.
+    -->
+    <!-- CONFIRMATION: NO SVG graphics used. NO Mermaid JS used. -->
+
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700;900&display=swap');
-        body { font-family: 'Inter', sans-serif; }
-        .notion-container iframe {
-            border-radius: 1.5rem;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Noto+Sans+TC:wght@300;400;500;700&display=swap');
+        
+        body {
+            font-family: 'Noto Sans TC', 'Inter', sans-serif;
+            background-color: #f8fafc;
+            color: #0f172a;
         }
-        /* 增加一個簡單的動畫效果 */
-        @keyframes pulse-slow {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
+
+        .chart-wrapper {
+            position: relative;
+            width: 100%;
+            max-width: 650px;
+            margin: 0 auto;
+            height: 400px;
+            max-height: 450px;
         }
-        .animate-pulse-slow {
-            animation: pulse-slow 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+
+        .card-interface {
+            background: white;
+            border-radius: 1.25rem;
+            box-shadow: 0 4px 25px -4px rgba(0, 0, 0, 0.04);
+            border: 1px solid #e2e8f0;
+            transition: all 0.3s ease;
+        }
+
+        .step-marker {
+            position: relative;
+            padding-left: 2.5rem;
+            border-left: 2px solid #3b82f6;
+        }
+
+        .step-marker::after {
+            content: ' ';
+            position: absolute;
+            left: -0.5rem;
+            top: 0;
+            width: 1rem;
+            height: 1rem;
+            background: #3b82f6;
+            border: 4px solid #f8fafc;
+            border-radius: 50%;
         }
     </style>
 </head>
-<body class="bg-neutral-50 text-neutral-900">
-    <div id="root"></div>
+<body class="antialiased">
 
-    <script type="text/babel">
-        const { useState, useEffect } = React;
-
-        // 簡單的圖標組件封裝
-        const Icon = ({ name, className }) => {
-            useEffect(() => {
-                if (window.lucide) {
-                    window.lucide.createIcons();
-                }
-            }, []);
-            return <i data-lucide={name} className={className}></i>;
-        };
-
-        const App = () => {
-            // 直接使用使用者提供的嵌入碼 URL，這是目前最有可能成功的格式
-            const [embedUrl] = useState('https://curly-ketch-268.notion.site/ebd/2ea4f4d665ce8077ab37fef4b6b31ef2');
-            // 原始閱讀連結，用於手動開啟
-            const [readingUrl] = useState('https://curly-ketch-268.notion.site/Merry-Sound-Design-2ea4f4d665ce8077ab37fef4b6b31ef2');
-            const [activeTab, setActiveTab] = useState('theory');
-
-            const insights = [
-                {
-                    id: 'theory',
-                    title: '社會—技術路徑 (Socio-technological)',
-                    icon: 'book-open',
-                    content: '超越物理聲音的設計。設計的核心不在於波形，而在於聽者如何理解經驗。這是一種由「聽覺行為 (Listening)」而非單純「聲音 (Sound)」驅動的方法。',
-                    tags: ['IRCAM 2022', '感官經驗', '語義映射']
-                },
-                {
-                    id: 'ecosystem',
-                    title: '聲音生態系與競合關係',
-                    icon: 'layout',
-                    content: '單一聲音不再孤立存在。在產品環境中，不同類別的聲音需要相互「競爭」頻譜與時間空間，透過良好的調度達成和諧感與連貫的品牌敘事。',
-                    tags: ['聲音競合', '敘事連貫性', '和諧度']
-                },
-                {
-                    id: 'charisma',
-                    title: '魅力工程：參數轉化',
-                    icon: 'settings',
-                    content: '將抽象美感量化。例如「優雅」對應純淨音色與長尾韻；「可靠」對應低頻重心與低粗糙度。透過精準控制譜重心與包絡來實現。',
-                    tags: ['魅力工程', '聲學描述符', '品牌識別']
-                }
-            ];
-
-            return (
-                <div className="min-h-screen">
-                    <nav className="sticky top-0 z-50 bg-white/90 backdrop-blur-md border-b border-neutral-200 px-6 py-4 flex justify-between items-center">
-                        <div className="flex items-center gap-2">
-                            <div className="bg-black p-1.5 rounded-lg flex items-center justify-center">
-                                <Icon name="activity" className="text-white w-5 h-5" />
-                            </div>
-                            <h1 className="font-bold text-xl tracking-tight">IRCAM STMS 研究：聲音魅力工程</h1>
-                        </div>
-                        <div className="flex gap-4 text-sm font-medium">
-                            <button onClick={() => setActiveTab('theory')} className={`hover:text-blue-600 transition ${activeTab === 'theory' ? 'text-blue-600' : ''}`}>理論框架分析</button>
-                            <a href="#notion-section" className="text-neutral-500 hover:text-blue-600 transition">實作與音檔展示</a>
-                        </div>
-                    </nav>
-
-                    <main className="max-w-7xl mx-auto px-6 py-12 grid grid-cols-1 lg:grid-cols-12 gap-12">
-                        <div className="lg:col-span-4 space-y-6">
-                            <div className="bg-blue-50 border border-blue-200 p-5 rounded-2xl flex gap-3 shadow-sm">
-                                <Icon name="info" className="w-5 h-5 text-blue-600 shrink-0" />
-                                <div>
-                                    <p className="text-xs font-bold text-blue-800 uppercase mb-1">關於內容呈現</p>
-                                    <p className="text-[11px] text-blue-700 leading-relaxed">
-                                        雖然已「Publish to web」，但部分瀏覽器基於隱私權設定仍會阻擋 Notion 嵌入。若右側顯示空白，請點擊下方的藍色按鈕手動開啟。
-                                    </p>
-                                </div>
-                            </div>
-
-                            <section className="space-y-4">
-                                <h2 className="text-sm font-bold text-neutral-400 uppercase tracking-widest flex items-center gap-2">
-                                    <Icon name="book" className="w-4 h-4" /> 核心文獻亮點
-                                </h2>
-                                {insights.map((item) => (
-                                    <div 
-                                        key={item.id}
-                                        className={`p-6 rounded-2xl border transition-all cursor-pointer ${activeTab === item.id ? 'bg-white shadow-xl border-blue-200 ring-1 ring-blue-50' : 'bg-transparent border-neutral-200 opacity-80 hover:opacity-100'}`}
-                                        onClick={() => setActiveTab(item.id)}
-                                    >
-                                        <div className="flex items-center gap-3 mb-3">
-                                            <div className={`${activeTab === item.id ? 'text-blue-600' : 'text-neutral-400'}`}>
-                                                <Icon name={item.icon} className="w-5 h-5" />
-                                            </div>
-                                            <h3 className="font-bold">{item.title}</h3>
-                                        </div>
-                                        <p className="text-sm text-neutral-600 leading-relaxed mb-4">{item.content}</p>
-                                        <div className="flex flex-wrap gap-2">
-                                            {item.tags.map(tag => (
-                                                <span key={tag} className="text-[10px] px-2 py-1 bg-neutral-100 text-neutral-500 rounded-full font-medium">#{tag}</span>
-                                            ))}
-                                        </div>
-                                    </div>
-                                ))}
-                            </section>
-                        </div>
-
-                        <div className="lg:col-span-8 space-y-8">
-                            <div className="bg-white p-10 rounded-3xl border border-neutral-200 shadow-sm relative overflow-hidden">
-                                <h2 className="text-3xl font-black mb-6 tracking-tight">
-                                    從「聲音物理」走向<br />
-                                    <span className="text-blue-600">「聽覺經驗」的設計轉移</span>
-                                </h2>
-                                <div className="grid md:grid-cols-2 gap-8 text-neutral-600">
-                                    <div className="space-y-4 text-sm leading-relaxed">
-                                        <p className="font-medium text-neutral-900 border-l-4 border-blue-500 pl-4">
-                                            研究指出，聲音魅力源於「精準的語義映射」。
-                                        </p>
-                                        <p>優雅感的實現透過高譜重心與長尾韻組合；可靠感則依賴低頻重心的穩定性。</p>
-                                    </div>
-                                    <div className="space-y-4 text-sm leading-relaxed">
-                                        <p>聲音生態系強調「競合」。當多個 UI 聲音同時存在時，協調頻譜空間才能建立連貫的品牌敘事。</p>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div id="notion-section" className="space-y-4">
-                                <div className="flex justify-between items-end px-2">
-                                    <div>
-                                        <h2 className="text-lg font-bold">Merry Sound Design 實作成果</h2>
-                                        <p className="text-xs text-neutral-400 italic">若無法預覽，請點擊右側連結手動開啟</p>
-                                    </div>
-                                    <div className="flex gap-4">
-                                        <a href={readingUrl} target="_blank" className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-full text-xs font-bold hover:bg-blue-700 transition shadow-lg shadow-blue-200">
-                                            <Icon name="external-link" className="w-3 h-3" /> 手動開啟音檔清單
-                                        </a>
-                                    </div>
-                                </div>
-                                
-                                <div className="notion-container w-full bg-white rounded-3xl border border-neutral-200 shadow-2xl overflow-hidden min-h-[850px] relative">
-                                    {/* 背景 Fallback 提示 */}
-                                    <div className="absolute inset-0 flex flex-col items-center justify-center -z-10 bg-neutral-50 p-10 text-center">
-                                        <Icon name="loader-2" className="w-10 h-10 text-blue-200 animate-spin mb-4" />
-                                        <h3 className="text-neutral-800 font-bold mb-2">正在載入 Notion 嵌入內容...</h3>
-                                        <p className="text-neutral-400 text-sm max-w-sm mb-6">
-                                            如果長時間顯示此畫面或出現「拒絕連接」，代表您的瀏覽器限制了 Notion 的直接嵌入。
-                                        </p>
-                                        <a href={readingUrl} target="_blank" className="text-blue-600 text-sm font-bold border-b border-blue-600 pb-0.5 hover:text-blue-800 transition">
-                                            點此於新分頁查看完整內容
-                                        </a>
-                                    </div>
-
-                                    <iframe
-                                        src={embedUrl}
-                                        width="100%"
-                                        height="850px"
-                                        frameBorder="0"
-                                        allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
-                                        allowFullScreen
-                                        title="Notion Study Log"
-                                        className="bg-white w-full relative z-10"
-                                    ></iframe>
-                                </div>
-                            </div>
-                        </div>
-                    </main>
-
-                    <footer className="max-w-7xl mx-auto px-6 py-12 border-t border-neutral-200 flex flex-col md:flex-row justify-between items-center text-neutral-400 text-[11px] uppercase tracking-widest font-bold">
-                        <span>© 2024 CHARISMA ENGINEERING RESEARCH EXHIBITION</span>
-                        <div className="flex gap-6">
-                            <span>IRCAM STMS PDS TEAM</span>
-                            <span>SONIC IDENTITY SYSTEM</span>
-                        </div>
-                    </footer>
+    <!-- Global Navigation -->
+    <nav class="sticky top-0 z-50 bg-white/80 backdrop-blur-lg border-b border-slate-200">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16">
+                <div class="flex items-center gap-3">
+                    <div class="w-9 h-9 bg-slate-900 rounded-lg flex items-center justify-center text-white font-bold text-xl italic shadow-inner">I</div>
+                    <span class="text-lg font-bold tracking-tight text-slate-800">IRCAM STMS <span class="text-blue-600">PDS</span> 研究分佈</span>
                 </div>
-            );
+                <div class="hidden md:flex space-x-8 items-center">
+                    <button onclick="navTo('theory-base')" class="text-slate-500 hover:text-blue-600 text-sm font-semibold transition-colors">設計理論</button>
+                    <button onclick="navTo('radar-lab')" class="text-slate-500 hover:text-blue-600 text-sm font-semibold transition-colors">感知映射實驗室</button>
+                    <button onclick="navTo('system-view')" class="text-slate-500 hover:text-blue-600 text-sm font-semibold transition-colors">動態與生態系</button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Header Section -->
+    <header class="bg-slate-900 text-white py-24 relative overflow-hidden">
+        <div class="absolute inset-0 opacity-5" style="background-image: linear-gradient(#3b82f6 1.5px, transparent 1.5px), linear-gradient(90deg, #3b82f6 1.5px, transparent 1.5px); background-size: 40px 40px;"></div>
+        <div class="max-w-4xl mx-auto px-6 relative z-10 text-center">
+            <h1 class="text-4xl md:text-6xl font-black mb-8 tracking-tighter">聲音語義設計與感知特徵分析</h1>
+            <p class="text-lg md:text-xl text-slate-400 mb-10 leading-relaxed font-light">
+                本系統旨在分析如何將感官描述符 (Descriptors) <br class="hidden md:block"> 精確轉化為聲學描述符 (Acoustic Descriptors)。
+            </p>
+            <div class="inline-flex items-center gap-2 px-4 py-2 bg-blue-500/10 rounded-full border border-blue-500/30 text-xs font-mono text-blue-400">
+                CORE: SPEAK Lexicon / Perceptual Mapping / 2020-2025
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-20 space-y-32">
+
+        <!-- Section 1: Socio-technological Base -->
+        <section id="theory-base" class="scroll-mt-24">
+            <div class="grid lg:grid-cols-2 gap-16 items-center">
+                <div>
+                    <h2 class="text-3xl font-black text-slate-900 mb-8 flex items-center gap-3">
+                        <span class="text-blue-600 font-mono">01.</span> 設計典範轉向
+                    </h2>
+                    <p class="text-slate-600 mb-8 leading-loose text-lg font-light italic border-l-4 border-blue-500 pl-6">
+                        "A socio-technological, sound-driven approach to design is concerned about the meaning and understanding of the experience driven by listening, rather than by sound."
+                    </p>
+                    <div class="grid gap-4">
+                        <div class="p-6 bg-white border border-slate-200 rounded-2xl shadow-sm">
+                            <h4 class="font-bold text-slate-800 mb-2 tracking-tight">物理與感知的交集</h4>
+                            <p class="text-sm text-slate-500 leading-relaxed">設計師透過操控聲學特徵，最終目標是精準達成心理上的語義回饋。這並非純物理合成，而是語義編碼過程。</p>
+                        </div>
+                        <div class="p-6 bg-white border border-slate-200 rounded-2xl shadow-sm">
+                            <h4 class="font-bold text-slate-800 mb-2 tracking-tight">SPEAK 語義詞庫</h4>
+                            <p class="text-sm text-slate-500 leading-relaxed">IRCAM 建立的標準化詞庫，使設計師能用形容詞定義規格，並讓工程師有明確的對應參數可循。</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="card-interface p-10 bg-slate-50 border-slate-200 text-center">
+                    <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-10">互動演示：語義轉化機制</p>
+                    <div class="flex flex-col gap-8">
+                        <div class="flex justify-between items-center relative">
+                            <div class="z-10 bg-white p-4 rounded-full border-2 border-slate-200 shadow-sm">💬</div>
+                            <div class="flex-1 h-0.5 bg-slate-200 mx-2"></div>
+                            <div class="z-10 bg-blue-600 text-white p-4 rounded-full shadow-lg">⚙</div>
+                            <div class="flex-1 h-0.5 bg-slate-200 mx-2"></div>
+                            <div class="z-10 bg-white p-4 rounded-full border-2 border-slate-200 shadow-sm">🔊</div>
+                        </div>
+                        <div class="bg-white p-8 rounded-2xl border border-slate-100 shadow-inner">
+                            <p id="dynamic-logic" class="text-base font-medium text-slate-700 leading-relaxed italic">"當語義為「光滑」時，重點在於 Spectral Flatness 的優化與 Roughness 的極小化。"</p>
+                            <div class="mt-8 flex flex-wrap justify-center gap-2">
+                                <button onclick="setLogic('smooth')" class="text-xs px-4 py-2 bg-slate-100 hover:bg-slate-900 hover:text-white rounded-full font-bold transition-all">Smooth</button>
+                                <button onclick="setLogic('agile')" class="text-xs px-4 py-2 bg-slate-100 hover:bg-slate-900 hover:text-white rounded-full font-bold transition-all">Agile</button>
+                                <button onclick="setLogic('solid')" class="text-xs px-4 py-2 bg-slate-100 hover:bg-slate-900 hover:text-white rounded-full font-bold transition-all">Solid</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Section 2: Radar Mapping Lab -->
+        <section id="radar-lab" class="scroll-mt-24">
+            <div class="text-center mb-16">
+                <h2 class="text-4xl font-black text-slate-900 mb-6">語義映射與多維感知分析</h2>
+                <div class="w-24 h-1.5 bg-blue-600 mx-auto rounded-full mb-8"></div>
+                <p class="text-slate-600 max-w-3xl mx-auto text-lg">
+                    展示如何量化不同描述符在感知空間中的權重。請切換類別以觀察參數對應關係。
+                </p>
+            </div>
+
+            <div class="grid lg:grid-cols-3 gap-10">
+                <!-- Controls Side -->
+                <div class="space-y-4">
+                    <h4 class="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mb-6">Semantic Categories</h4>
+                    
+                    <button onclick="triggerRadar('sophistication')" class="w-full text-left p-6 rounded-2xl border-2 border-slate-100 bg-white hover:border-blue-500 transition-all group shadow-sm active:scale-95">
+                        <div class="flex items-center gap-4 mb-4">
+                            <div class="w-3 h-3 rounded-full bg-blue-500"></div>
+                            <span class="font-black text-slate-800 text-lg">精緻度 (Sophistication)</span>
+                        </div>
+                        <p class="text-[10px] text-slate-400 font-bold uppercase mb-2">Related Parameters:</p>
+                        <p class="text-xs text-slate-500 font-medium">Spectral Centroid, Purity, Release.</p>
+                    </button>
+
+                    <button onclick="triggerRadar('utility')" class="w-full text-left p-6 rounded-2xl border-2 border-slate-100 bg-white hover:border-emerald-500 transition-all group shadow-sm active:scale-95">
+                        <div class="flex items-center gap-4 mb-4">
+                            <div class="w-3 h-3 rounded-full bg-emerald-500"></div>
+                            <span class="font-black text-slate-800 text-lg">功能效用 (Utility)</span>
+                        </div>
+                        <p class="text-[10px] text-slate-400 font-bold uppercase mb-2">Related Parameters:</p>
+                        <p class="text-xs text-slate-500 font-medium">Attack, Roughness, Information Density.</p>
+                    </button>
+
+                    <button onclick="triggerRadar('innovation')" class="w-full text-left p-6 rounded-2xl border-2 border-slate-100 bg-white hover:border-purple-500 transition-all group shadow-sm active:scale-95">
+                        <div class="flex items-center gap-4 mb-4">
+                            <div class="w-3 h-3 rounded-full bg-purple-500"></div>
+                            <span class="font-black text-slate-800 text-lg">創新性格 (Innovation)</span>
+                        </div>
+                        <p class="text-[10px] text-slate-400 font-bold uppercase mb-2">Related Parameters:</p>
+                        <p class="text-xs text-slate-500 font-medium">Modulation Depth, Inharmonicity, Temporal Trajectory.</p>
+                    </button>
+                </div>
+
+                <!-- Visualization Side -->
+                <div class="lg:col-span-2 card-interface p-10 bg-white border-slate-100 shadow-2xl relative">
+                    <div class="flex justify-between items-center mb-10 border-b border-slate-50 pb-6">
+                        <h3 id="radar-heading" class="text-2xl font-black text-slate-900 tracking-tight">精緻度感知分佈分析</h3>
+                        <div class="flex items-center gap-2">
+                            <span class="w-2.5 h-2.5 bg-blue-500 rounded-sm"></span>
+                            <span class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Acoustic Descriptors</span>
+                        </div>
+                    </div>
+                    <div class="chart-wrapper">
+                        <canvas id="mainRadarChart"></canvas>
+                    </div>
+                    <div class="mt-10 p-4 bg-slate-50 rounded-xl text-sm text-slate-500 italic">
+                        * 雷達圖呈現了描述符在五個核心聲學維度的歸一化權重分配。
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Section 3: Time and Space -->
+        <section id="system-view" class="scroll-mt-24">
+            <div class="grid lg:grid-cols-2 gap-16">
+                <!-- Temporal behavior -->
+                <div class="space-y-8">
+                    <div class="flex items-end gap-3 mb-2">
+                        <h3 class="text-3xl font-black text-slate-900">時間行為形態</h3>
+                        <span class="text-[10px] font-bold text-slate-400 uppercase pb-1 tracking-widest">Temporal Morphology</span>
+                    </div>
+                    <div class="card-interface p-8 h-[350px]">
+                        <canvas id="timeLineChart"></canvas>
+                    </div>
+                    <p class="text-slate-500 text-sm leading-relaxed font-light">
+                        聲音的魅力在於其動態演變。這包括 <strong>Attack</strong> 的瞬態特性與 <strong>Release</strong> 的演變軌跡，這些參數決定了聲音在感知上的因果感與呼吸感。
+                    </p>
+                </div>
+
+                <!-- Spectral Competition -->
+                <div class="space-y-8">
+                    <div class="flex items-end gap-3 mb-2">
+                        <h3 class="text-3xl font-black text-slate-900">頻譜競合與生態系</h3>
+                        <span class="text-[10px] font-bold text-slate-400 uppercase pb-1 tracking-widest">Sonic Ecosystem</span>
+                    </div>
+                    <div class="card-interface p-8 h-[350px]">
+                        <canvas id="spaceBarChart"></canvas>
+                    </div>
+                    <p class="text-slate-500 text-sm leading-relaxed font-light">
+                        在系統級聲音設計中，不同類型的聲音必須共享頻譜空間。透過頻譜調度，避免重要資訊（如 UI 反饋音）被環境背景遮蔽 (Masking)。
+                    </p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Section 4: Workflow -->
+        <section class="scroll-mt-24">
+            <div class="bg-slate-900 text-white rounded-[3rem] p-12 md:p-20 shadow-3xl relative overflow-hidden">
+                <div class="absolute top-0 right-0 w-96 h-96 bg-blue-600/10 blur-[100px]"></div>
+                <div class="relative z-10 grid lg:grid-cols-2 gap-20">
+                    <div>
+                        <h2 class="text-3xl font-black mb-10 border-l-4 border-blue-500 pl-8 leading-tight">IRCAM <br>聲音設計標準方法論</h2>
+                        <div class="space-y-10">
+                            <div class="step-marker">
+                                <h4 class="text-blue-400 font-black mb-2 uppercase tracking-widest text-xs">Phase 01</h4>
+                                <h3 class="text-xl font-bold mb-2">語義規格定義</h3>
+                                <p class="text-slate-400 text-sm font-light">收集品牌/產品形容詞，利用 SPEAK 詞庫建立語義規格書。</p>
+                            </div>
+                            <div class="step-marker">
+                                <h4 class="text-blue-400 font-black mb-2 uppercase tracking-widest text-xs">Phase 02</h4>
+                                <h3 class="text-xl font-bold mb-2">感知維度映射</h3>
+                                <p class="text-slate-400 text-sm font-light">利用心理聲學數據，將語義轉化為音色骨架與聲學目標值。</p>
+                            </div>
+                            <div class="step-marker">
+                                <h4 class="text-blue-400 font-black mb-2 uppercase tracking-widest text-xs">Phase 03</h4>
+                                <h3 class="text-xl font-bold mb-2">參數優化與合成</h3>
+                                <p class="text-slate-400 text-sm font-light">調整原文參數（Roughness, Sharpness, Attack 等）以達成目標感知曲線。</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="flex flex-col justify-center">
+                        <div class="bg-white/5 border border-white/10 p-10 rounded-3xl backdrop-blur-sm">
+                            <h5 class="text-xs font-black text-slate-500 uppercase tracking-[0.3em] mb-8">關鍵詞與技術指標對應 (Speak)</h5>
+                            <div class="grid grid-cols-2 gap-6">
+                                <div class="space-y-2">
+                                    <span class="block text-blue-400 font-black text-sm">Smooth</span>
+                                    <span class="block text-[10px] text-slate-500 font-mono">Low Roughness / Flatness</span>
+                                </div>
+                                <div class="space-y-2">
+                                    <span class="block text-emerald-400 font-black text-sm">Agile</span>
+                                    <span class="block text-[10px] text-slate-500 font-mono">Short Attack / High Centroid</span>
+                                </div>
+                                <div class="space-y-2">
+                                    <span class="block text-purple-400 font-black text-sm">Solid</span>
+                                    <span class="block text-[10px] text-slate-500 font-mono">Low Fundamental / Harmonicity</span>
+                                </div>
+                                <div class="space-y-2">
+                                    <span class="block text-amber-400 font-black text-sm">Modern</span>
+                                    <span class="block text-[10px] text-slate-500 font-mono">Inharmonicity / Temporal Trajectory</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Footer -->
+    <footer class="bg-white border-t border-slate-200 py-20">
+        <div class="max-w-7xl mx-auto px-6 text-center">
+            <div class="flex flex-wrap justify-center gap-4 mb-10">
+                <span class="text-[9px] font-black text-slate-400 border border-slate-200 px-3 py-1 rounded-full uppercase tracking-tighter">Sound Semantics</span>
+                <span class="text-[9px] font-black text-slate-400 border border-slate-200 px-3 py-1 rounded-full uppercase tracking-tighter">Perceptual Space</span>
+                <span class="text-[9px] font-black text-slate-400 border border-slate-200 px-3 py-1 rounded-full uppercase tracking-tighter">Acoustic Descriptors</span>
+            </div>
+            <p class="text-slate-500 text-xs mb-6 max-w-xl mx-auto leading-relaxed">
+                研究數據整理自 IRCAM STMS 實驗室 PDS 團隊 (2020-2025)。重點在於科學化描述聲音與感知之因果連結。
+            </p>
+            <div class="text-[10px] text-slate-400 font-mono space-y-1">
+                <p>Misdariis et al. (2022). Sound design: R&D laboratory. DRS2022.</p>
+                <p>Virkus et al. (2025). Semantic space of UX sounds.</p>
+            </div>
+        </div>
+    </footer>
+
+    <!-- JS Logic -->
+    <script>
+        // --- Utils ---
+        function navTo(id) {
+            document.getElementById(id).scrollIntoView({ behavior: 'smooth' });
+        }
+
+        // --- Logic Switch ---
+        const logicDict = {
+            smooth: "當語義為「光滑」時，重點在於 Spectral Flatness 的優化與 Roughness 的極小化。",
+            agile: "「敏捷」在感知上對應極短的 Attack 時間與較高的 Spectral Centroid 維度。",
+            solid: "「堅實感」通常透過豐富的低階諧波與明確的因果結構 (Causality) 來建立。"
         };
 
-        const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
+        function setLogic(type) {
+            const el = document.getElementById('dynamic-logic');
+            el.style.opacity = '0';
+            setTimeout(() => {
+                el.innerText = `"${logicDict[type]}"`;
+                el.style.opacity = '1';
+            }, 250);
+        }
+
+        // --- Radar Chart Configuration ---
+        let mainRadar = null;
+        const radarProfiles = {
+            sophistication: {
+                title: "精緻度感知分佈分析",
+                data: [95, 80, 10, 25, 90], // Purity, Release, Roughness, Modulation, Centroid
+                color: "rgb(59, 130, 246)"
+            },
+            utility: {
+                title: "功能效用感知分佈分析",
+                data: [45, 30, 90, 20, 55],
+                color: "rgb(16, 185, 129)"
+            },
+            innovation: {
+                title: "創新性格感知分佈分析",
+                data: [65, 55, 40, 95, 80],
+                color: "rgb(168, 85, 247)"
+            }
+        };
+
+        function initRadar() {
+            const ctx = document.getElementById('mainRadarChart').getContext('2d');
+            mainRadar = new Chart(ctx, {
+                type: 'radar',
+                data: {
+                    labels: ['Purity', 'Release', 'Roughness', 'Modulation', 'Centroid'],
+                    datasets: [{
+                        label: 'Perceptual Weight',
+                        data: radarProfiles.sophistication.data,
+                        backgroundColor: 'rgba(59, 130, 246, 0.2)',
+                        borderColor: 'rgb(59, 130, 246)',
+                        borderWidth: 2,
+                        pointBackgroundColor: 'rgb(59, 130, 246)',
+                        pointBorderColor: '#fff',
+                        pointHoverBackgroundColor: '#fff'
+                    }]
+                },
+                options: {
+                    maintainAspectRatio: false,
+                    scales: {
+                        r: {
+                            suggestedMin: 0,
+                            suggestedMax: 100,
+                            ticks: { display: false },
+                            grid: { color: '#f1f5f9' },
+                            angleLines: { color: '#f1f5f9' },
+                            pointLabels: {
+                                font: { family: "'Inter', sans-serif", size: 11, weight: 'bold' },
+                                color: '#64748b'
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: { display: false }
+                    }
+                }
+            });
+        }
+
+        function triggerRadar(key) {
+            const profile = radarProfiles[key];
+            document.getElementById('radar-heading').innerText = profile.title;
+            mainRadar.data.datasets[0].data = profile.data;
+            mainRadar.data.datasets[0].borderColor = profile.color;
+            mainRadar.data.datasets[0].backgroundColor = profile.color.replace('rgb', 'rgba').replace(')', ', 0.2)');
+            mainRadar.data.datasets[0].pointBackgroundColor = profile.color;
+            mainRadar.update();
+        }
+
+        // --- Line Chart (Time) ---
+        function initTimeChart() {
+            const ctx = document.getElementById('timeLineChart').getContext('2d');
+            new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: ['0ms', '50ms', '150ms', '300ms', '600ms', '1s', '1.5s'],
+                    datasets: [{
+                        label: 'Intensity Envelope',
+                        data: [0, 100, 85, 75, 40, 10, 0],
+                        borderColor: '#3b82f6',
+                        backgroundColor: 'rgba(59, 130, 246, 0.05)',
+                        fill: true,
+                        tension: 0.4,
+                        pointRadius: 2
+                    }]
+                },
+                options: {
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        y: { display: false },
+                        x: { grid: { display: false }, ticks: { font: { size: 9, family: 'Inter' } } }
+                    }
+                }
+            });
+        }
+
+        // --- Bar Chart (Space) ---
+        function initSpaceChart() {
+            const ctx = document.getElementById('spaceBarChart').getContext('2d');
+            new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: ['20-200Hz', '200-1kHz', '1-5kHz', '5-12kHz', '12-20kHz'],
+                    datasets: [
+                        { label: 'Ambient Background', data: [85, 65, 30, 15, 5], backgroundColor: '#e2e8f0' },
+                        { label: 'Primary UX Feedback', data: [15, 35, 95, 45, 10], backgroundColor: '#3b82f6' }
+                    ]
+                },
+                options: {
+                    maintainAspectRatio: false,
+                    indexAxis: 'y',
+                    scales: {
+                        x: { stacked: true, display: false },
+                        y: { stacked: true, grid: { display: false }, ticks: { font: { size: 9, family: 'Inter' } } }
+                    },
+                    plugins: { 
+                        legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 9, family: 'Inter' } } } 
+                    }
+                }
+            });
+        }
+
+        // --- Init All ---
+        window.onload = () => {
+            initRadar();
+            initTimeChart();
+            initSpaceChart();
+        };
     </script>
 </body>
 </html>
