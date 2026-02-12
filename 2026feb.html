@@ -14,9 +14,9 @@
          The SPA is organized as a dynamic research dossier focusing on Perceptual Descriptors.
          1. Hero: Technical introduction focusing on Descriptors and Acoustic Parameters.
          2. Concept Block: Interactive comparison of Sound vs. Listening.
-         3. Mapping Lab: The central Radar Chart allows users to visualize how Sophistication, Utility, and Innovation map to specific parameters.
-         4. Dynamics & Ecosystem: Visualizing time-based behavior and spectral competition.
-         5. Methodology: Documenting the standardized IRCAM design workflow.
+         3. Mapping Lab: Visualizing Sophistication, Utility, and Innovation mapping with specific DESIGN STRATEGIES.
+         4. Dynamics & Ecosystem: Expanded text for spectral competition and masking logic.
+         5. Implementation: Direct link to Notion for live sound listening.
     -->
     
     <!-- Visualization & Content Choices:
@@ -80,12 +80,15 @@
             <div class="flex justify-between h-16">
                 <div class="flex items-center gap-3">
                     <div class="w-9 h-9 bg-slate-900 rounded-lg flex items-center justify-center text-white font-bold text-xl italic shadow-inner">I</div>
-                    <span class="text-lg font-bold tracking-tight text-slate-800">IRCAM STMS <span class="text-blue-600">PDS</span> 研究分佈</span>
+                    <span class="text-lg font-bold tracking-tight text-slate-800">IRCAM STMS <span class="text-blue-600">PDS</span> 研究分析</span>
                 </div>
                 <div class="hidden md:flex space-x-8 items-center">
                     <button onclick="navTo('theory-base')" class="text-slate-500 hover:text-blue-600 text-sm font-semibold transition-colors">設計理論</button>
                     <button onclick="navTo('radar-lab')" class="text-slate-500 hover:text-blue-600 text-sm font-semibold transition-colors">感知映射實驗室</button>
                     <button onclick="navTo('system-view')" class="text-slate-500 hover:text-blue-600 text-sm font-semibold transition-colors">動態與生態系</button>
+                    <a href="https://curly-ketch-268.notion.site/Merry-Sound-Design-2ea4f4d665ce8077ab37fef4b6b31ef2" target="_blank" class="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-blue-700 transition shadow-lg shadow-blue-200">
+                        🔊 實作試聽
+                    </a>
                 </div>
             </div>
         </div>
@@ -99,8 +102,10 @@
             <p class="text-lg md:text-xl text-slate-400 mb-10 leading-relaxed font-light">
                 本系統旨在分析如何將感官描述符 (Descriptors) <br class="hidden md:block"> 精確轉化為聲學描述符 (Acoustic Descriptors)。
             </p>
-            <div class="inline-flex items-center gap-2 px-4 py-2 bg-blue-500/10 rounded-full border border-blue-500/30 text-xs font-mono text-blue-400">
-                CORE: SPEAK Lexicon / Perceptual Mapping / 2020-2025
+            <div class="inline-flex items-center gap-4">
+                <div class="px-4 py-2 bg-blue-500/10 rounded-full border border-blue-500/30 text-xs font-mono text-blue-400 uppercase tracking-widest">
+                    CORE: SPEAK Lexicon / Perceptual Mapping
+                </div>
             </div>
         </div>
     </header>
@@ -157,7 +162,7 @@
                 <h2 class="text-4xl font-black text-slate-900 mb-6">語義映射與多維感知分析</h2>
                 <div class="w-24 h-1.5 bg-blue-600 mx-auto rounded-full mb-8"></div>
                 <p class="text-slate-600 max-w-3xl mx-auto text-lg">
-                    展示如何量化不同描述符在感知空間中的權重。請切換類別以觀察參數對應關係。
+                    展示如何量化不同描述符在感知空間中的權重，並提供具體的設計對策。
                 </p>
             </div>
 
@@ -203,17 +208,22 @@
                             <span class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Acoustic Descriptors</span>
                         </div>
                     </div>
+                    
                     <div class="chart-wrapper">
                         <canvas id="mainRadarChart"></canvas>
                     </div>
-                    <div class="mt-10 p-4 bg-slate-50 rounded-xl text-sm text-slate-500 italic">
-                        * 雷達圖呈現了描述符在五個核心聲學維度的歸一化權重分配。
+
+                    <div id="radar-strategy" class="mt-10 p-6 bg-slate-50 rounded-2xl border border-slate-100">
+                        <h4 class="text-sm font-black text-slate-800 uppercase tracking-widest mb-3">設計對策 (Design Strategy)</h4>
+                        <p class="text-sm text-slate-600 leading-relaxed font-light">
+                            <strong>精緻度對策：</strong> 增加音色的 <span class="font-bold">Purity</span> (減少非諧波噪音)，配合中高頻的 <span class="font-bold">Spectral Centroid</span> 營造清亮感，最後加上較長的 <span class="font-bold">Release</span> 建立空間餘韻，避免機械式的突兀切斷。
+                        </p>
                     </div>
                 </div>
             </div>
         </section>
 
-        <!-- Section 3: Time and Space -->
+        <!-- Section 3: Time and Space (Expanded) -->
         <section id="system-view" class="scroll-mt-24">
             <div class="grid lg:grid-cols-2 gap-16">
                 <!-- Temporal behavior -->
@@ -225,12 +235,15 @@
                     <div class="card-interface p-8 h-[350px]">
                         <canvas id="timeLineChart"></canvas>
                     </div>
-                    <p class="text-slate-500 text-sm leading-relaxed font-light">
-                        聲音的魅力在於其動態演變。這包括 <strong>Attack</strong> 的瞬態特性與 <strong>Release</strong> 的演變軌跡，這些參數決定了聲音在感知上的因果感與呼吸感。
-                    </p>
+                    <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
+                        <h4 class="text-xs font-black text-slate-400 uppercase tracking-widest mb-2">動態演變之重要性</h4>
+                        <p class="text-slate-600 text-sm leading-relaxed font-light">
+                            聲音的質感往往取決於時間軸上的微小變動。例如，產品啟動音若具備緩慢變化的 <span class="font-bold">Spectral Centroid</span>，能營造「呼吸感」；反之，若參數全程不變，聽者會感知為廉價的電子合成音。
+                        </p>
+                    </div>
                 </div>
 
-                <!-- Spectral Competition -->
+                <!-- Spectral Competition (Expanded) -->
                 <div class="space-y-8">
                     <div class="flex items-end gap-3 mb-2">
                         <h3 class="text-3xl font-black text-slate-900">頻譜競合與生態系</h3>
@@ -239,14 +252,19 @@
                     <div class="card-interface p-8 h-[350px]">
                         <canvas id="spaceBarChart"></canvas>
                     </div>
-                    <p class="text-slate-500 text-sm leading-relaxed font-light">
-                        在系統級聲音設計中，不同類型的聲音必須共享頻譜空間。透過頻譜調度，避免重要資訊（如 UI 反饋音）被環境背景遮蔽 (Masking)。
-                    </p>
+                    <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
+                        <h4 class="text-xs font-black text-slate-400 uppercase tracking-widest mb-2">深入理解遮蔽與競合</h4>
+                        <p class="text-slate-600 text-sm leading-relaxed font-light">
+                            在複雜的環境中（如車室或繁忙辦公室），聲音之間存在 <span class="font-bold">物理競爭</span>。當兩個聲音頻率重疊時，較大聲的會產生「遮蔽效應」(Masking)，導致重要訊息（如 UI 反饋音）被環境背景音吃掉。
+                            <br><br>
+                            <span class="font-bold text-blue-600">設計策略：</span> 透過「頻譜雕刻」(Spectral Carving)，避開背景噪音的高能量區段。例如在環境低頻噪音大時，將 UI 音效重心移往中高頻 (1k-4kHz)，以確保其在認知層面的獨特性與清晰度。
+                        </p>
+                    </div>
                 </div>
             </div>
         </section>
 
-        <!-- Section 4: Workflow -->
+        <!-- Section 4: Workflow & Listening Archive -->
         <section class="scroll-mt-24">
             <div class="bg-slate-900 text-white rounded-[3rem] p-12 md:p-20 shadow-3xl relative overflow-hidden">
                 <div class="absolute top-0 right-0 w-96 h-96 bg-blue-600/10 blur-[100px]"></div>
@@ -257,41 +275,30 @@
                             <div class="step-marker">
                                 <h4 class="text-blue-400 font-black mb-2 uppercase tracking-widest text-xs">Phase 01</h4>
                                 <h3 class="text-xl font-bold mb-2">語義規格定義</h3>
-                                <p class="text-slate-400 text-sm font-light">收集品牌/產品形容詞，利用 SPEAK 詞庫建立語義規格書。</p>
+                                <p class="text-slate-400 text-sm font-light">定義品牌形容詞對，利用 SPEAK 詞庫建立精確的語義規格書。</p>
                             </div>
                             <div class="step-marker">
                                 <h4 class="text-blue-400 font-black mb-2 uppercase tracking-widest text-xs">Phase 02</h4>
                                 <h3 class="text-xl font-bold mb-2">感知維度映射</h3>
-                                <p class="text-slate-400 text-sm font-light">利用心理聲學數據，將語義轉化為音色骨架與聲學目標值。</p>
+                                <p class="text-slate-400 text-sm font-light">將語義需求轉化為聲學指標，決定聲音的物理骨架。</p>
                             </div>
                             <div class="step-marker">
                                 <h4 class="text-blue-400 font-black mb-2 uppercase tracking-widest text-xs">Phase 03</h4>
-                                <h3 class="text-xl font-bold mb-2">參數優化與合成</h3>
-                                <p class="text-slate-400 text-sm font-light">調整原文參數（Roughness, Sharpness, Attack 等）以達成目標感知曲線。</p>
+                                <h3 class="text-xl font-bold mb-2">實作、試聽與校準</h3>
+                                <p class="text-slate-400 text-sm font-light">調整參數並置於實際環境中測試，確保其功能與美學達成平衡。</p>
                             </div>
                         </div>
                     </div>
                     <div class="flex flex-col justify-center">
-                        <div class="bg-white/5 border border-white/10 p-10 rounded-3xl backdrop-blur-sm">
-                            <h5 class="text-xs font-black text-slate-500 uppercase tracking-[0.3em] mb-8">關鍵詞與技術指標對應 (Speak)</h5>
-                            <div class="grid grid-cols-2 gap-6">
-                                <div class="space-y-2">
-                                    <span class="block text-blue-400 font-black text-sm">Smooth</span>
-                                    <span class="block text-[10px] text-slate-500 font-mono">Low Roughness / Flatness</span>
-                                </div>
-                                <div class="space-y-2">
-                                    <span class="block text-emerald-400 font-black text-sm">Agile</span>
-                                    <span class="block text-[10px] text-slate-500 font-mono">Short Attack / High Centroid</span>
-                                </div>
-                                <div class="space-y-2">
-                                    <span class="block text-purple-400 font-black text-sm">Solid</span>
-                                    <span class="block text-[10px] text-slate-500 font-mono">Low Fundamental / Harmonicity</span>
-                                </div>
-                                <div class="space-y-2">
-                                    <span class="block text-amber-400 font-black text-sm">Modern</span>
-                                    <span class="block text-[10px] text-slate-500 font-mono">Inharmonicity / Temporal Trajectory</span>
-                                </div>
-                            </div>
+                        <div class="bg-white/5 border border-white/10 p-10 rounded-3xl backdrop-blur-sm text-center">
+                            <h5 class="text-xs font-black text-slate-500 uppercase tracking-[0.3em] mb-6">實作案例列表 (Sound Archive)</h5>
+                            <p class="text-slate-400 text-sm mb-8 font-light leading-relaxed">
+                                目前所有的聲音設計實作、GripBall 感應反饋及 Sonic Squid 音效清單均已整理至 Notion 專頁。
+                            </p>
+                            <a href="https://curly-ketch-268.notion.site/Merry-Sound-Design-2ea4f4d665ce8077ab37fef4b6b31ef2" target="_blank" class="inline-flex items-center gap-3 px-8 py-4 bg-white text-slate-900 rounded-2xl font-black hover:bg-blue-50 transition-all shadow-xl">
+                                <span>立即前往試聽列表</span>
+                                <span class="text-blue-600">→</span>
+                            </a>
                         </div>
                     </div>
                 </div>
@@ -347,17 +354,20 @@
             sophistication: {
                 title: "精緻度感知分佈分析",
                 data: [95, 80, 10, 25, 90], // Purity, Release, Roughness, Modulation, Centroid
-                color: "rgb(59, 130, 246)"
+                color: "rgb(59, 130, 246)",
+                strategy: "<strong>精緻度對策：</strong> 增加音色的 <span class='font-bold text-blue-600'>Purity</span> (減少非諧波噪音)，配合中高頻的 <span class='font-bold text-blue-600'>Spectral Centroid</span> 營造清亮感，最後加上較長的 <span class='font-bold text-blue-600'>Release</span> 建立空間餘韻，避免機械式的突兀切斷。"
             },
             utility: {
                 title: "功能效用感知分佈分析",
                 data: [45, 30, 90, 20, 55],
-                color: "rgb(16, 185, 129)"
+                color: "rgb(16, 185, 129)",
+                strategy: "<strong>功能效用對策：</strong> 強調極短且明亮的 <span class='font-bold text-emerald-600'>Attack</span> 以提供即時反饋，適度保留 <span class='font-bold text-emerald-600'>Roughness</span> 可增加聽覺的物理確定感，類似於實體按鍵的阻力。"
             },
             innovation: {
                 title: "創新性格感知分佈分析",
                 data: [65, 55, 40, 95, 80],
-                color: "rgb(168, 85, 247)"
+                color: "rgb(168, 85, 247)",
+                strategy: "<strong>創新性格對策：</strong> 運用較深度的 <span class='font-bold text-purple-600'>Modulation Depth</span> 與非傳統諧波結構，打破常見的預期心理，並結合動態的音高軌跡來營造未來感。"
             }
         };
 
@@ -403,6 +413,10 @@
         function triggerRadar(key) {
             const profile = radarProfiles[key];
             document.getElementById('radar-heading').innerText = profile.title;
+            document.getElementById('radar-strategy').innerHTML = `
+                <h4 class="text-sm font-black text-slate-800 uppercase tracking-widest mb-3">設計對策 (Design Strategy)</h4>
+                <p class="text-sm text-slate-600 leading-relaxed font-light">${profile.strategy}</p>
+            `;
             mainRadar.data.datasets[0].data = profile.data;
             mainRadar.data.datasets[0].borderColor = profile.color;
             mainRadar.data.datasets[0].backgroundColor = profile.color.replace('rgb', 'rgba').replace(')', ', 0.2)');
