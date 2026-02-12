@@ -20,6 +20,14 @@
             border-radius: 1.5rem;
             box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
         }
+        /* 增加一個簡單的動畫效果 */
+        @keyframes pulse-slow {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .animate-pulse-slow {
+            animation: pulse-slow 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
     </style>
 </head>
 <body class="bg-neutral-50 text-neutral-900">
@@ -39,8 +47,8 @@
         };
 
         const App = () => {
-            // 使用使用者提供的特定嵌入 URL
-            const [rawUrl] = useState('https://curly-ketch-268.notion.site/ebd/2ea4f4d665ce8077ab37fef4b6b31ef2');
+            // 切換至更強制的嵌入路徑格式
+            const [rawUrl] = useState('https://www.notion.so/embed/2ea4f4d665ce8077ab37fef4b6b31ef2');
             const [activeTab, setActiveTab] = useState('theory');
 
             const insights = [
@@ -84,24 +92,24 @@
 
                     <main className="max-w-7xl mx-auto px-6 py-12 grid grid-cols-1 lg:grid-cols-12 gap-12">
                         <div className="lg:col-span-4 space-y-6">
-                            <div className="bg-amber-50 border border-amber-200 p-5 rounded-2xl flex gap-3">
-                                <Icon name="alert-circle" className="w-5 h-5 text-amber-600 shrink-0" />
+                            <div className="bg-blue-50 border border-blue-200 p-5 rounded-2xl flex gap-3">
+                                <Icon name="info" className="w-5 h-5 text-blue-600 shrink-0" />
                                 <div>
-                                    <p className="text-xs font-bold text-amber-800 uppercase mb-1">提示：內容顯示問題</p>
-                                    <p className="text-[11px] text-amber-700 leading-relaxed">
-                                        已更換為專用嵌入網址。若內容仍顯示異常，請確認您的 Notion 頁面已點擊右上角的 <b>「Share」→「Publish」→「Publish to web」</b>。
+                                    <p className="text-xs font-bold text-blue-800 uppercase mb-1">嵌入狀態確認</p>
+                                    <p className="text-[11px] text-blue-700 leading-relaxed">
+                                        如果右側仍然顯示空白，請務必確認您的 Notion 頁面點擊了 <b>「Share」→「Publish」→「Publish to web」</b>。這與一般的「邀請連結」不同，是嵌入成功的唯一條件。
                                     </p>
                                 </div>
                             </div>
 
                             <section className="space-y-4">
                                 <h2 className="text-sm font-bold text-neutral-400 uppercase tracking-widest flex items-center gap-2">
-                                    <Icon name="info" className="w-4 h-4" /> 核心文獻亮點
+                                    <Icon name="book" className="w-4 h-4" /> 核心文獻亮點
                                 </h2>
                                 {insights.map((item) => (
                                     <div 
                                         key={item.id}
-                                        className={`p-6 rounded-2xl border transition-all cursor-pointer ${activeTab === item.id ? 'bg-white shadow-xl border-blue-200 ring-1 ring-blue-50' : 'bg-transparent border-neutral-200 opacity-80'}`}
+                                        className={`p-6 rounded-2xl border transition-all cursor-pointer ${activeTab === item.id ? 'bg-white shadow-xl border-blue-200 ring-1 ring-blue-50' : 'bg-transparent border-neutral-200 opacity-80 hover:opacity-100'}`}
                                         onClick={() => setActiveTab(item.id)}
                                     >
                                         <div className="flex items-center gap-3 mb-3">
@@ -143,23 +151,30 @@
                             <div id="notion-section" className="space-y-4">
                                 <div className="flex justify-between items-end px-2">
                                     <div>
-                                        <h2 className="text-lg font-bold">Merry Sound Design</h2>
-                                        <p className="text-xs text-neutral-400 italic">使用專用嵌入來源載入中...</p>
+                                        <h2 className="text-lg font-bold">Merry Sound Design 實作成果</h2>
+                                        <p className="text-xs text-neutral-400 italic">正在透過 Notion 官方嵌入接口載入...</p>
                                     </div>
                                     <a href="https://curly-ketch-268.notion.site/Merry-Sound-Design-2ea4f4d665ce8077ab37fef4b6b31ef2" target="_blank" className="flex items-center gap-1.5 text-xs text-blue-600 font-medium hover:underline">
-                                        在 Notion 中開啟 <Icon name="external-link" className="w-3 h-3" />
+                                        在新分頁中打開 Notion <Icon name="external-link" className="w-3 h-3" />
                                     </a>
                                 </div>
                                 
-                                <div className="notion-container w-full bg-white rounded-3xl border border-neutral-200 shadow-2xl overflow-hidden min-h-[800px] relative">
+                                <div className="notion-container w-full bg-white rounded-3xl border border-neutral-200 shadow-2xl overflow-hidden min-h-[850px] relative">
+                                    {/* 背景 Loading 提示 */}
+                                    <div className="absolute inset-0 flex flex-col items-center justify-center -z-10 bg-neutral-50">
+                                        <Icon name="loader-2" className="w-10 h-10 text-blue-200 animate-spin mb-4" />
+                                        <p className="text-neutral-400 text-sm animate-pulse-slow">內容即將呈現，請稍候...</p>
+                                    </div>
+
                                     <iframe
                                         src={rawUrl}
                                         width="100%"
                                         height="850px"
                                         frameBorder="0"
+                                        allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
                                         allowFullScreen
                                         title="Notion Study Log"
-                                        className="bg-white w-full"
+                                        className="bg-white w-full relative z-10"
                                     ></iframe>
                                 </div>
                             </div>
