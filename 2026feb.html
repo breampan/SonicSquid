@@ -31,27 +31,17 @@
         // 簡單的圖標組件封裝
         const Icon = ({ name, className }) => {
             useEffect(() => {
-                lucide.createIcons();
+                if (window.lucide) {
+                    window.lucide.createIcons();
+                }
             }, []);
             return <i data-lucide={name} className={className}></i>;
         };
 
         const App = () => {
-            const [rawUrl] = useState('https://curly-ketch-268.notion.site/Merry-Sound-Design-2ea4f4d665ce8077ab37fef4b6b31ef2');
-            const [embedUrl, setEmbedUrl] = useState('');
+            // 使用使用者提供的特定嵌入 URL
+            const [rawUrl] = useState('https://curly-ketch-268.notion.site/ebd/2ea4f4d665ce8077ab37fef4b6b31ef2');
             const [activeTab, setActiveTab] = useState('theory');
-
-            useEffect(() => {
-                const formatUrl = (url) => {
-                    if (!url) return '';
-                    const match = url.match(/[a-f0-9]{32}/);
-                    if (match) {
-                        return `https://www.notion.so/embed/${match[0]}`;
-                    }
-                    return url;
-                };
-                setEmbedUrl(formatUrl(rawUrl));
-            }, [rawUrl]);
 
             const insights = [
                 {
@@ -99,7 +89,7 @@
                                 <div>
                                     <p className="text-xs font-bold text-amber-800 uppercase mb-1">提示：內容顯示問題</p>
                                     <p className="text-[11px] text-amber-700 leading-relaxed">
-                                        若內容顯示「拒絕連接」，請確認您的 Notion 頁面已點擊右上角的 <b>「Share」→「Publish」→「Publish to web」</b>。
+                                        已更換為專用嵌入網址。若內容仍顯示異常，請確認您的 Notion 頁面已點擊右上角的 <b>「Share」→「Publish」→「Publish to web」</b>。
                                     </p>
                                 </div>
                             </div>
@@ -154,16 +144,16 @@
                                 <div className="flex justify-between items-end px-2">
                                     <div>
                                         <h2 className="text-lg font-bold">Merry Sound Design</h2>
-                                        <p className="text-xs text-neutral-400 italic">正在載入實驗記錄與音檔清單...</p>
+                                        <p className="text-xs text-neutral-400 italic">使用專用嵌入來源載入中...</p>
                                     </div>
-                                    <a href={rawUrl} target="_blank" className="flex items-center gap-1.5 text-xs text-blue-600 font-medium hover:underline">
+                                    <a href="https://curly-ketch-268.notion.site/Merry-Sound-Design-2ea4f4d665ce8077ab37fef4b6b31ef2" target="_blank" className="flex items-center gap-1.5 text-xs text-blue-600 font-medium hover:underline">
                                         在 Notion 中開啟 <Icon name="external-link" className="w-3 h-3" />
                                     </a>
                                 </div>
                                 
                                 <div className="notion-container w-full bg-white rounded-3xl border border-neutral-200 shadow-2xl overflow-hidden min-h-[800px] relative">
                                     <iframe
-                                        src={embedUrl}
+                                        src={rawUrl}
                                         width="100%"
                                         height="850px"
                                         frameBorder="0"
