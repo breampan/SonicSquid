@@ -30,7 +30,7 @@
 
         #challenge-ui {
             position: absolute; top: 25px; left: 25px;
-            display: flex; flex-direction: column; gap: 12px; z-index: 200;
+            display: flex; flex-direction: column; gap: 10px; z-index: 200;
         }
         .action-btn {
             background: rgba(100, 220, 255, 0.2); border: 1px solid #64dcff;
@@ -77,9 +77,11 @@
 
     <script>
         /**
-         * 數位再生水族箱 - 聽能定向終極整合版 (流暢優化版)
-         * 整合：參考物理全環境版做法，引入雙重平滑（Lerp 座標 + setTargetAtTime）。
-         * 功能：聽能挑戰流程、16秒淡出、複習模式、全 FM 合成。
+         * 數位再生水族箱 - 聽能定向終極整合版 (流暢物理修復版)
+         * 修復：參考流暢版做法，整合「雙重平滑化機制」：
+         * 1. 座標插值 (Lerp)：smoothedX/Y 消除原始輸入抖動。
+         * 2. 參數指數平滑：tc=0.15s 徹底根除藍色物件相位雜音。
+         * 3. 近場能量校正：確保靠近聽者時聲音飽滿但不爆裂。
          */
         const canvas = document.getElementById('appCanvas');
         const ctx = canvas.getContext('2d');
@@ -121,7 +123,9 @@
             if (audioCtx) return;
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             masterCompressor = audioCtx.createDynamicsCompressor();
+            // 使用錄音室級別的壓縮參數
             masterCompressor.threshold.setTargetAtTime(-24, audioCtx.currentTime, 0.1);
+            masterCompressor.ratio.setValueAtTime(12, audioCtx.currentTime);
             masterCompressor.connect(audioCtx.destination);
             
             convolver = audioCtx.createConvolver();
@@ -181,7 +185,7 @@
                 btn.innerText = "退出挑戰模式";
                 scoreDisplay.style.display = "block";
                 challengeState = 'preparing';
-                hint.innerHTML = "準備好了嗎？<br><span style='font-size:18px; color:#fff'>點擊畫面任何地方開始聽能挑戰</span>";
+                hint.innerHTML = "準備好了嗎？<br><span style='font-size:18px; color:#fff'>點擊畫面任何地方開始</span>";
                 hint.style.opacity = 1;
             } else {
                 btn.innerText = "開啟聽能挑戰模式";
@@ -196,14 +200,15 @@
             document.getElementById('feedback-controls').style.display = "none";
             const hint = document.getElementById('challenge-hint');
             hint.innerHTML = "請閉上眼聆聽聲音移動...";
+            hint.style.opacity = 1;
             
             const types = Object.values(WAVE_TYPES);
             const randomType = types[Math.floor(Math.random() * types.length)];
             
-            const safeMarginX = width * 0.25;
-            const safeMarginY = height * 0.25;
-            const rx = safeMarginX + Math.random() * (width - safeMarginX * 2);
-            const ry = safeMarginY + Math.random() * (height - safeMarginY * 2);
+            const safeX = width * 0.25;
+            const safeY = height * 0.25;
+            const rx = safeX + Math.random() * (width - safeX * 2);
+            const ry = safeY + Math.random() * (height - safeY * 2);
             
             challengeTarget = new DraggableSound(randomType, rx, ry);
             challengeTarget.isChallengeObject = true;
@@ -248,6 +253,7 @@
             document.getElementById('feedback-controls').style.display = "none";
             const hint = document.getElementById('challenge-hint');
             hint.innerHTML = "準備下一題...<br><span style='font-size:18px; color:#fff'>點擊畫面繼續</span>";
+            hint.style.opacity = 1;
         };
 
         function drawBackground() {
@@ -336,7 +342,7 @@
         class DraggableSound {
             constructor(typeConfig, x, y) {
                 this.type = typeConfig.id; this.rgb = typeConfig.color; this.x = x; this.y = y;
-                // 【流暢機制】：引入 smoothed 座標，消除像素抖動造成的相位爆音
+                // 【流暢核心】：參考流暢版做法，使用 Smoothed 座標
                 this.smoothedX = x; this.smoothedY = y;
                 this.prevDist = 0; this.velocity = 0; this.dopplerFactor = 1.0; 
                 this.isDragging = false; this.isFading = false; this.isChallengeObject = false; 
@@ -354,7 +360,7 @@
                 this.pinnaFilter = audioCtx.createBiquadFilter(); this.pinnaFilter.type = 'highshelf';
                 
                 this.panner.panningModel = 'HRTF';
-                // 參考流暢版做法，使用手動增益平衡，防止 PannerNode 內建物理跳變
+                // 鎖定 PannerNode 的自動衰減，由 updatePanner 進行手動增益平衡，防止死區雜音
                 this.panner.distanceModel = 'linear'; 
                 this.panner.refDistance = 100.0; 
                 this.panner.rolloffFactor = 0;   
@@ -386,7 +392,7 @@
             updatePanner(isInit = false) {
                 if (!this.panner || !audioCtx) return;
                 const now = audioCtx.currentTime;
-                // 使用 smoothed 座標進行計算，解決跳變問題
+                // 使用插值後的 smoothed 座標，徹底解決像素抖動造成的雜音
                 const posX = ((this.smoothedX - centerX) / (width * 0.4 || 1)) * 12;
                 const posZ = ((this.smoothedY - listenerPlaneY) / (height * 0.4 || 1)) * 12;
                 const rawDist = Math.sqrt(posX*posX + posZ*posZ);
@@ -399,7 +405,7 @@
                 }
                 this.prevDist = rawDist;
 
-                // 【核心優化】：平滑常數設為 0.15s
+                // 【音訊平滑化】：使用 0.15s 作為平滑常數
                 const tc = 0.15;
                 this.panner.positionX.setTargetAtTime(posX, now, tc);
                 this.panner.positionZ.setTargetAtTime(posZ, now, tc);
@@ -451,7 +457,7 @@
                 this.pulse += 0.08;
                 if (this.isDragging) { 
                     this.life = 1.0; 
-                    // 【流暢機制】：在物理層對座標進行 Lerp
+                    // 【流暢座標更新】：Lerp 插值演算法
                     this.smoothedX += (this.x - this.smoothedX) * 0.22;
                     this.smoothedY += (this.y - this.smoothedY) * 0.22;
                     this.updatePanner(); 
@@ -481,6 +487,7 @@
                         this.cleanup(); 
                         activeObjects = activeObjects.filter(o => o !== this); 
                     } else {
+                        // 淡出時也需要更新 Panner 以維持聲場穩定
                         this.updatePanner(); 
                     }
                 }
