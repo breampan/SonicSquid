@@ -115,6 +115,7 @@
         /**
          * 多點觸控空間聲景合成器 (HRTF + Convolution Reverb)
          * 終極修復：消除正弦波 FM 調變毛邊、優化壓縮器 Attack 防止波形失真
+         * 最新優化：根除拖曳造成的 Zipper Noise (雜音)，全面使用指數漸近線平滑處理。
          */
         const canvas = document.getElementById('appCanvas');
         const ctx = canvas.getContext('2d');
@@ -395,7 +396,6 @@
                     this.source.connect(this.pulseGain);
                     this.pulseGain.connect(this.filter);
                 } else if (this.type === 'sine') {
-                    // 【正弦波特調】降低音量，並過濾高頻避免激發殘響毛刺
                     this.source = audioCtx.createOscillator();
                     this.source.type = 'sine'; 
                     this.filter.type = 'lowpass';
@@ -403,7 +403,6 @@
                     baseGainValue = 0.18; // 更為溫和的音量
                     if(this.source) this.source.connect(this.filter);
                 } else if (this.type === 'triangle') {
-                    // 三角波
                     this.source = audioCtx.createOscillator();
                     this.source.type = 'triangle'; 
                     this.filter.type = 'lowpass';
@@ -412,7 +411,7 @@
                     if(this.source) this.source.connect(this.filter);
                 }
 
-                // 呼叫初始化參數
+                // 初始化時直接設定座標與頻率
                 this.updatePanner(true);
 
                 this.gain.gain.setValueAtTime(0.0001, startTime);
@@ -434,26 +433,49 @@
                 const posZ = (this.smoothedY / height) * 10 - 5; 
                 const posY = 0; 
 
-                // 【修復純音拖曳失真】放棄 linearRamp，全面改用 setTargetAtTime
-                // 0.05 的時間常數提供了絕佳的平滑度，杜絕 FM 側波失真
-                const tc = isInit ? 0.001 : 0.05; 
-
-                if (this.panner.positionX) {
-                    this.panner.positionX.setTargetAtTime(posX, now, tc);
-                    this.panner.positionY.setTargetAtTime(posY, now, tc);
-                    this.panner.positionZ.setTargetAtTime(posZ, now, tc);
-                } else {
-                    this.panner.setPosition(posX, posY, posZ);
-                }
-
+                let targetFreq = 0;
                 if (this.source && this.type !== 'boatman') {
                     const heightRatio = Math.max(0, Math.min(1, 1 - (this.smoothedY / height))); 
-                    let targetFreq = this.type === 'noise' ? 400 + heightRatio * 3000 : 200 + heightRatio * 1000;
-                    
-                    if (this.type === 'noise') {
-                        this.filter.frequency.setTargetAtTime(targetFreq, now, tc);
-                    } else if (this.source.frequency) {
-                        this.source.frequency.setTargetAtTime(targetFreq, now, tc);
+                    targetFreq = this.type === 'noise' ? 400 + heightRatio * 3000 : 200 + heightRatio * 1000;
+                }
+
+                if (isInit) {
+                    // 初始化時，強制瞬間抵達 (無平滑時間)
+                    if (this.panner.positionX) {
+                        this.panner.positionX.setValueAtTime(posX, now);
+                        this.panner.positionY.setValueAtTime(posY, now);
+                        this.panner.positionZ.setValueAtTime(posZ, now);
+                    } else {
+                        this.panner.setPosition(posX, posY, posZ);
+                    }
+                    if (targetFreq) {
+                        if (this.type === 'noise') {
+                            this.filter.frequency.setValueAtTime(targetFreq, now);
+                        } else {
+                            this.source.frequency.setValueAtTime(targetFreq, now);
+                        }
+                    }
+                } else {
+                    // 【解決 Zipper Noise 的關鍵】
+                    // 放棄所有 linearRamp，改用 setTargetAtTime。
+                    // 這會在當下值與目標值之間產生一條不會有折角的連續指數漸近線。
+                    // 0.08 的時間常數提供了非常滑順的聽覺反饋，同時不會覺得遲鈍。
+                    const timeConstant = 0.08; 
+
+                    if (this.panner.positionX) {
+                        this.panner.positionX.setTargetAtTime(posX, now, timeConstant);
+                        this.panner.positionY.setTargetAtTime(posY, now, timeConstant);
+                        this.panner.positionZ.setTargetAtTime(posZ, now, timeConstant);
+                    } else {
+                        this.panner.setPosition(posX, posY, posZ);
+                    }
+
+                    if (targetFreq) {
+                        if (this.type === 'noise') {
+                            this.filter.frequency.setTargetAtTime(targetFreq, now, timeConstant);
+                        } else if (this.source.frequency) {
+                            this.source.frequency.setTargetAtTime(targetFreq, now, timeConstant);
+                        }
                     }
                 }
             }
@@ -504,7 +526,7 @@
                     this.smoothedX += (this.x - this.smoothedX) * 0.15;
                     this.smoothedY += (this.y - this.smoothedY) * 0.15;
 
-                    this.updatePanner();
+                    this.updatePanner(false); // 持續平滑更新座標與頻率
 
                     this.history.push({x: this.smoothedX, y: this.smoothedY});
                     if (this.history.length > 20) this.history.shift();
