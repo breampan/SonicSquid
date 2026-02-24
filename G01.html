@@ -85,11 +85,11 @@
 
     <script>
         /**
-         * 數位再生水族箱 - 3D 空間主場版 (聲學優化版)
-         * 1. 聲學：放寬衰減半徑 (refDistance=6, rolloff=0.4)，延長聽覺邊界。
-         * 2. 視覺：不同場景獨立風格、色彩與網格律動。
-         * 3. 生物：FishCreature 圍繞聲源盤旋 (Orbiting Logic)。
-         * 4. 物理：強力都普勒、侵略性側鏈、全 FM 合成架構。
+         * 數位再生水族箱 - 3D 空間主場版 (UI 與聲學優化版)
+         * 1. UI 優化：加大右側調色盤圖示，調整間距與座標，提升點擊感。
+         * 2. 聲學：放寬衰減半徑 (refDistance=6, rolloff=0.4)，延長聽覺邊界。
+         * 3. 視覺：不同場景獨立風格、色彩與網格律動。
+         * 4. 生物：FishCreature 圍繞聲源盤旋。
          */
         const canvas = document.getElementById('appCanvas');
         const ctx = canvas.getContext('2d');
@@ -201,7 +201,6 @@
             ctx.lineWidth = 1;
             ctx.strokeStyle = cfg.main + Math.floor(cfg.gridAlpha * 255).toString(16).padStart(2, '0');
             
-            // 輻射線 & 透視環
             for (let i = 0; i < 24; i++) {
                 const angle = (i / 24) * Math.PI * 2 + Math.sin(t * 0.15) * 0.08;
                 ctx.beginPath();
@@ -218,7 +217,6 @@
                 ctx.stroke();
             }
 
-            // 聽者中心視覺
             ctx.save();
             ctx.shadowBlur = 25;
             ctx.shadowColor = cfg.main + '55';
@@ -255,7 +253,7 @@
             if (type === 'sine') {
                 const ringPulse = Math.sin(pulse * 0.5) * 5;
                 const innerR = Math.max(0.1, currentSize * 0.65 + ringPulse);
-                const outerR = Math.max(0.1, currentSize * 0.85 + (modDepth / 250) * 10);
+                const outerR = Math.max(0.1, currentSize * 0.8 + (modDepth / 250) * 10);
                 ctx.beginPath(); ctx.arc(0, 0, innerR, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
                 ctx.rotate(pulse * (0.3 + (modFreq / 120))); 
                 ctx.beginPath(); ctx.arc(outerR * 0.45, 0, Math.max(0.1, outerR * 0.35), 0, Math.PI * 2); ctx.stroke();
@@ -313,7 +311,6 @@
                     let dx = target.x - this.x; let dy = target.y - this.y;
                     let d = Math.sqrt(dx*dx + dy*dy);
                     if (d > 5) {
-                        // 環繞吸引力 (渦流效應)
                         const attract = 0.16;
                         const orbit = 0.28;
                         this.vx += (dx / d) * attract + (-dy / d) * orbit;
@@ -362,12 +359,11 @@
                 this.airFilter = audioCtx.createBiquadFilter();
                 this.airFilter.type = 'lowpass';
 
-                // 【優化關鍵】：調整衰減係數，讓有效聽覺範圍顯著擴大
                 this.panner.panningModel = (this.type === 'sine') ? 'equalpower' : 'HRTF';
-                this.panner.distanceModel = 'linear'; // 線性衰減較符合此介面的視覺預期
-                this.panner.refDistance = 6.0;        // 6公尺內不衰減 (幾乎佔據半個螢幕)
-                this.panner.maxDistance = 30.0;      // 30公尺後靜音
-                this.panner.rolloffFactor = 0.5;     // 慢速衰減
+                this.panner.distanceModel = 'linear'; 
+                this.panner.refDistance = 6.0;        
+                this.panner.maxDistance = 30.0;      
+                this.panner.rolloffFactor = 0.5;     
                 
                 this.gain.gain.value = 0.0001; this.sidechainGain.gain.value = 1.0;
 
@@ -392,7 +388,7 @@
                         let t = now + 0.05 + i/15;
                         this.pulseGain.gain.setValueAtTime(0, t); this.pulseGain.gain.linearRampToValueAtTime(1, t+0.005); this.pulseGain.gain.exponentialRampToValueAtTime(0.001, t+0.04);
                     }
-                    this.source.connect(this.pulseGain); this.pulseGain.connect(this.airFilter);
+                    this.source.connect(this.pulseGain); this.source.connect(this.airFilter);
                 }
 
                 this.airFilter.connect(this.panner);
@@ -408,7 +404,6 @@
             updatePanner(isInit = false) {
                 if (!this.panner || !audioCtx) return;
                 const now = audioCtx.currentTime;
-                // 中心座標映射系統 - 略微調低座標縮放，匹配大範圍聽覺
                 const posX = ((this.smoothedX - centerX) / (width * 0.4 || 1)) * 12;
                 const posZ = ((this.smoothedY - centerY) / (height * 0.4 || 1)) * 12;
                 const tc = isInit ? 0.001 : 0.15;
@@ -426,7 +421,6 @@
                 this.panner.positionZ.setTargetAtTime(posZ, now, tc);
                 this.panner.positionY.setTargetAtTime(-1.0, now, tc);
 
-                // 【空氣濾波優化】：讓高頻衰減更自然，不至於拉遠就完全消失
                 const zNorm = currentDist / 12;
                 if (this.airFilter) {
                     const airFreq = 20000 - (zNorm * 17500);
@@ -511,19 +505,26 @@
             canvas.style.width = width + 'px'; canvas.style.height = height + 'px';
             ctx.scale(dpr, dpr);
             centerX = width / 2; centerY = height / 2;
+            
+            // 【UI 優化】：調整右側圖示的座標與間距，並微調 x 軸位置使其更易觀察
             paletteIcons = [
-                { typeConfig: WAVE_TYPES.SINE, x: width - 50, y: 70 },
-                { typeConfig: WAVE_TYPES.TRIANGLE, x: width - 50, y: 150 },
-                { typeConfig: WAVE_TYPES.NOISE, x: width - 50, y: 230 },
-                { typeConfig: WAVE_TYPES.BOATMAN, x: width - 50, y: 310 }
+                { typeConfig: WAVE_TYPES.SINE, x: width - 65, y: 100 },
+                { typeConfig: WAVE_TYPES.TRIANGLE, x: width - 65, y: 200 },
+                { typeConfig: WAVE_TYPES.NOISE, x: width - 65, y: 300 },
+                { typeConfig: WAVE_TYPES.BOATMAN, x: width - 65, y: 400 }
             ];
         }
 
         function animate() {
             drawBackground();
             applySidechainDucking(); 
-            ctx.fillStyle = 'rgba(255, 255, 255, 0.01)'; ctx.fillRect(width - 90, 0, 90, 380);
-            paletteIcons.forEach(p => { drawGeometry(ctx, p.typeConfig.id, p.x, p.y, 20, p.typeConfig.color, 0.7, Date.now()*0.002, 0, 0); });
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.01)'; ctx.fillRect(width - 90, 0, 90, height);
+            
+            // 【UI 優化】：將右側圖示的大小從 20 增加到 38
+            paletteIcons.forEach(p => { 
+                drawGeometry(ctx, p.typeConfig.id, p.x, p.y, 38, p.typeConfig.color, 0.85, Date.now()*0.002, 0, 0); 
+            });
+            
             for (let i = activeObjects.length - 1; i >= 0; i--) {
                 activeObjects[i].update(); activeObjects[i].draw(ctx);
                 if (activeObjects[i].life <= 0 && activeObjects[i].isFading) activeObjects.splice(i, 1);
@@ -547,9 +548,10 @@
                     activeObjects.push(activeObjects.splice(i, 1)[0]); return;
                 }
             }
+            // 【UI 優化】：擴大右側圖示的點擊感應半徑至 55
             for (let i = 0; i < paletteIcons.length; i++) {
                 const p = paletteIcons[i];
-                if (Math.sqrt((pt.x-p.x)**2 + (pt.y-p.y)**2) < 40) {
+                if (Math.sqrt((pt.x-p.x)**2 + (pt.y-p.y)**2) < 55) {
                     const newObj = new DraggableSound(p.typeConfig, pt.x, pt.y);
                     newObj.isDragging = true; newObj.pointerId = e.pointerId;
                     activeObjects.push(newObj); activePointers.set(e.pointerId, newObj); newObj.play(); return;
