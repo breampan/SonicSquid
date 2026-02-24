@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>多點觸控空間聲景合成器</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #020812;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        canvas {
+            display: block;
+            touch-action: none;
+        }
+
+        /* 頂部調色盤指示 */
+        #palette-hint {
+            position: absolute;
+            top: 20px;
+            right: 120px;
+            color: rgba(255, 255, 255, 0.4);
+            font-size: 12px;
+            letter-spacing: 1px;
+            pointer-events: none;
+            text-align: right;
+            text-transform: uppercase;
+        }
+
+        /* 場景控制按鈕 */
+        #scene-controls {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 10px;
+            background: rgba(10, 15, 25, 0.6);
+            backdrop-filter: blur(15px);
+            padding: 12px 20px;
+            border-radius: 30px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            z-index: 100;
+            width: 90%;
+            max-width: 600px;
+            overflow-x: auto;
+            white-space: nowrap;
+            justify-content: center;
+        }
+
+        #scene-controls::-webkit-scrollbar { display: none; }
+
+        .scene-btn {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: #ccc;
+            padding: 10px 18px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s ease;
+            flex-shrink: 0;
+        }
+
+        .scene-btn.active {
+            background: rgba(100, 220, 255, 0.2);
+            border-color: #64dcff;
+            color: #fff;
+            box-shadow: 0 0 15px rgba(100, 220, 255, 0.3);
+        }
+
+        #ui-overlay {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: rgba(100, 220, 255, 0.6);
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        .instruction { font-size: 14px; letter-spacing: 2px; }
+        .sub-instruction { font-size: 11px; color: rgba(255,255,255,0.4); margin-top: 5px; }
+
+    </style>
+</head>
+<body>
+
+    <div id="ui-overlay">
+        <div class="instruction">空間聲景合成器</div>
+        <div class="sub-instruction">從右上方拖曳幾何音源<br>Y軸對應：前方(上) ⟷ 後方(下)<br>請佩戴耳機以體驗 HRTF 與 Convolution Reverb</div>
+    </div>
+
+    <div id="palette-hint">
+        ← 拖曳物件發聲
+    </div>
+
+    <div id="scene-controls">
+        <button class="scene-btn active" onclick="setScene('bathroom')">浴室 (短殘響)</button>
+        <button class="scene-btn" onclick="setScene('station')">歐洲大車站 (長殘響)</button>
+        <button class="scene-btn" onclick="setScene('cave')">山洞 (低頻空間)</button>
+        <button class="scene-btn" onclick="setScene('forest')">森林 (散射迴音)</button>
+    </div>
+
+    <canvas id="appCanvas"></canvas>
+
+    <script>
+        /**
+         * 多點觸控空間聲景合成器 (HRTF + Convolution Reverb)
+         */
+        const canvas = document.getElementById('appCanvas');
+        const ctx = canvas.getContext('2d');
+        let width, height;
+
+        // --- 核心系統狀態 ---
+        let audioCtx;
+        let convolver;
+        let masterDry;
+        let masterWet;
+        let currentScene = 'bathroom';
+        let isAudioInitialized = false;
+
+        // --- 物件與互動管理 ---
+        const MAX_OBJECTS = 20; // 畫面上最多殘留物件數
+        let activeObjects = []; // 畫面上所有被拖出來的音源物件
+        let paletteIcons = [];  // 右上角的調色盤選單
+        const activePointers = new Map(); // 追蹤多點觸控
+
+        // 定義四種波形視覺與聲學屬性
+        const WAVE_TYPES = {
+            SINE: { id: 'sine', color: '100, 220, 255', label: '圓球' },
+            TRIANGLE: { id: 'triangle', color: '255, 204, 170', label: '三角錐' },
+            NOISE: { id: 'noise', color: '160, 255, 170', label: '毛邊圓球' },
+            BOATMAN: { id: 'boatman', color: '255, 85, 68', label: '幾何劃蝽' }
+        };
+
+        // --- 音訊系統初始化 ---
+        function initAudio() {
+            if (isAudioInitialized) return;
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            
+            // HRTF 聽者設定 (位於中心，面向螢幕內部 Z = -1)
+            const listener = audioCtx.listener;
+            if (listener.positionX) {
+                listener.positionX.value = 0; listener.positionY.value = 0; listener.positionZ.value = 0;
+                listener.forwardX.value = 0; listener.forwardY.value = 0; listener.forwardZ.value = -1;
+            } else {
+                listener.setPosition(0, 0, 0);
+                listener.setOrientation(0, 0, -1, 0, 1, 0);
+            }
+
+            // 建立 Reverb (Convolver) 節點
+            convolver = audioCtx.createConvolver();
+            masterDry = audioCtx.createGain();
+            masterWet = audioCtx.createGain();
+            
+            masterDry.connect(audioCtx.destination);
+            convolver.connect(masterWet);
+            masterWet.connect(audioCtx.destination);
+
+            applySceneAudio(currentScene);
+            isAudioInitialized = true;
+        }
+
+        // --- 即時合成 Impulse Response (IR) ---
+        function generateIR(sceneType) {
+            if (!audioCtx) return null;
+            const sampleRate = audioCtx.sampleRate;
+            let length = 1.0, decay = 5.0, preDelay = 0, lpFreq = 20000;
+
+            if (sceneType === 'bathroom') {
+                length = 0.8; decay = 7.0; lpFreq = 8000;
+            } else if (sceneType === 'station') {
+                length = 4.0; decay = 1.5; preDelay = 0.05; lpFreq = 12000;
+            } else if (sceneType === 'cave') {
+                length = 3.0; decay = 2.5; lpFreq = 1500; // 暗沈的迴音
+            } else if (sceneType === 'forest') {
+                length = 1.5; decay = 4.0; lpFreq = 4000; // 散射感，高頻吸收
+            }
+
+            const frameCount = sampleRate * length;
+            const buffer = audioCtx.createBuffer(2, frameCount, sampleRate);
+            
+            for (let channel = 0; channel < 2; channel++) {
+                const data = buffer.getChannelData(channel);
+                let lastVal = 0;
+                for (let i = 0; i < frameCount; i++) {
+                    let t = i / sampleRate;
+                    if (t < preDelay) { data[i] = 0; continue; }
+                    
+                    let noise = (Math.random() * 2 - 1);
+                    
+                    // 簡單的 Lowpass Filter 處理 IR
+                    if (lpFreq < 10000) {
+                        noise = (lastVal + noise) * 0.5; 
+                        lastVal = noise;
+                    }
+
+                    // 森林的散射感 (Sparse reflection)
+                    if (sceneType === 'forest' && Math.random() > 0.1) noise = 0;
+
+                    let envelope = Math.exp(-decay * (t - preDelay));
+                    data[i] = noise * envelope * 0.5;
+                }
+            }
+            return buffer;
+        }
+
+        function applySceneAudio(scene) {
+            if (!audioCtx) return;
+            const buffer = generateIR(scene);
+            convolver.buffer = buffer;
+
+            // 調整 Dry/Wet 比例
+            if (scene === 'bathroom') { masterDry.gain.value = 0.7; masterWet.gain.value = 0.4; }
+            else if (scene === 'station') { masterDry.gain.value = 0.6; masterWet.gain.value = 0.6; }
+            else if (scene === 'cave') { masterDry.gain.value = 0.5; masterWet.gain.value = 0.7; }
+            else if (scene === 'forest') { masterDry.gain.value = 0.8; masterWet.gain.value = 0.3; }
+        }
+
+        window.setScene = (scene) => {
+            initAudio();
+            currentScene = scene;
+            document.querySelectorAll('.scene-btn').forEach(btn => btn.classList.remove('active'));
+            event.target.classList.add('active');
+            applySceneAudio(scene);
+        };
+
+        // --- 視覺繪圖共用函式 ---
+        function drawGeometry(ctx, type, x, y, size, rgbStr, alpha = 1.0, pulse = 0) {
+            ctx.save();
+            ctx.translate(x, y);
+            
+            // 外圍光暈
+            const glow = ctx.createRadialGradient(0, 0, size*0.5, 0, 0, size*2.5);
+            glow.addColorStop(0, `rgba(${rgbStr}, ${alpha * 0.5})`);
+            glow.addColorStop(1, 'transparent');
+            ctx.fillStyle = glow;
+            ctx.beginPath();
+            ctx.arc(0, 0, size*3, 0, Math.PI*2);
+            ctx.fill();
+
+            // 核心本體
+            ctx.fillStyle = `rgba(${rgbStr}, ${alpha})`;
+            ctx.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.8})`;
+            ctx.lineWidth = 2;
+
+            if (type === 'sine') {
+                // 正弦波：圓球
+                ctx.beginPath();
+                ctx.arc(0, 0, size, 0, Math.PI*2);
+                ctx.fill();
+                ctx.stroke();
+            } 
+            else if (type === 'triangle') {
+                // 三角波：立體三角錐
+                ctx.beginPath();
+                ctx.moveTo(0, -size*1.2);
+                ctx.lineTo(size, size);
+                ctx.lineTo(-size, size);
+                ctx.closePath();
+                ctx.fill();
+                ctx.stroke();
+                // 中間稜線
+                ctx.beginPath(); ctx.moveTo(0, -size*1.2); ctx.lineTo(0, size); ctx.stroke();
+            } 
+            else if (type === 'noise') {
+                // 噪音：毛邊圓球 (隨機突刺)
+                ctx.beginPath();
+                for (let i = 0; i < Math.PI * 2; i += 0.4) {
+                    let r = size + (Math.random() * size * 0.6);
+                    ctx.lineTo(Math.cos(i) * r, Math.sin(i) * r);
+                }
+                ctx.closePath();
+                ctx.fill();
+                ctx.stroke();
+            } 
+            else if (type === 'boatman') {
+                // 劃蝽：幾何昆蟲感
+                ctx.rotate(pulse * 0.2); // 稍微扭動
+                // 身體 (菱形)
+                ctx.beginPath();
+                ctx.moveTo(0, -size); ctx.lineTo(size*0.6, 0);
+                ctx.moveTo(size*0.6, 0); ctx.lineTo(0, size);
+                ctx.moveTo(0, size); ctx.lineTo(-size*0.6, 0);
+                ctx.moveTo(-size*0.6, 0); ctx.lineTo(0, -size);
+                ctx.fill(); ctx.stroke();
+                // 腿部 (折線)
+                ctx.beginPath();
+                ctx.moveTo(size*0.4, -size*0.3); ctx.lineTo(size*1.2, -size*0.8); ctx.lineTo(size*1.5, -size*0.4);
+                ctx.moveTo(-size*0.4, -size*0.3); ctx.lineTo(-size*1.2, -size*0.8); ctx.lineTo(-size*1.5, -size*0.4);
+                ctx.moveTo(size*0.5, size*0.3); ctx.lineTo(size*1.4, size*0.8);
+                ctx.moveTo(-size*0.5, size*0.3); ctx.lineTo(-size*1.4, size*0.8);
+                ctx.stroke();
+            }
+
+            ctx.restore();
+        }
+
+
+        // --- 可拖曳音源類別 ---
+        class DraggableSound {
+            constructor(typeConfig, x, y) {
+                this.type = typeConfig.id;
+                this.rgb = typeConfig.color;
+                this.x = x;
+                this.y = y;
+                this.size = 20;
+                this.isDragging = false;
+                this.pointerId = null;
+                this.pulse = 0;
+                
+                this.history = []; // 移動軌跡
+                
+                // Audio Nodes
+                this.source = null;
+                this.gain = null;
+                this.panner = null;
+                this.filter = null;
+            }
+
+            play() {
+                if (!audioCtx) return;
+                this.stop(0); // 確保舊節點清空
+
+                const now = audioCtx.currentTime;
+                this.gain = audioCtx.createGain();
+                this.panner = audioCtx.createPanner();
+                this.filter = audioCtx.createBiquadFilter();
+
+                // HRTF 設定
+                this.panner.panningModel = 'HRTF';
+                this.panner.distanceModel = 'inverse';
+                this.updatePanner();
+
+                // 根據波形產生聲音
+                if (this.type === 'noise') {
+                    this.source = audioCtx.createBufferSource();
+                    this.source.buffer = noiseBuffer;
+                    this.source.loop = true;
+                    this.filter.type = 'bandpass';
+                    this.filter.Q.value = 5;
+                    this.source.connect(this.filter);
+                } else if (this.type === 'boatman') {
+                    this.source = audioCtx.createOscillator();
+                    this.source.type = 'sawtooth';
+                    this.source.frequency.value = 4000;
+                    this.filter.type = 'bandpass';
+                    this.filter.frequency.value = 4000;
+                    this.filter.Q.value = 10;
+                    
+                    // 建立脈衝 LFO 模擬昆蟲摩擦
+                    this.pulseLfo = audioCtx.createOscillator();
+                    this.pulseLfo.type = 'square';
+                    this.pulseLfo.frequency.value = 18; // 18Hz clicks
+                    this.pulseGain = audioCtx.createGain();
+                    this.pulseGain.gain.value = 0;
+                    this.pulseLfo.connect(this.pulseGain.gain);
+                    this.pulseLfo.start();
+
+                    this.source.connect(this.pulseGain);
+                    this.pulseGain.connect(this.filter);
+                } else {
+                    this.source = audioCtx.createOscillator();
+                    this.source.type = this.type; // sine 或 triangle
+                    this.filter.type = 'lowpass';
+                    this.filter.frequency.value = 6000;
+                    this.source.connect(this.filter);
+                }
+
+                // 淡入防止爆音
+                this.gain.gain.setValueAtTime(0.0001, now);
+                this.gain.gain.exponentialRampToValueAtTime(this.type === 'boatman' ? 0.6 : 0.3, now + 0.1);
+
+                // 路由：Panner -> [Dry & Wet(Reverb)]
+                this.filter.connect(this.panner);
+                this.panner.connect(this.gain);
+                
+                this.gain.connect(masterDry);
+                this.gain.connect(convolver); // 送入空間殘響
+
+                this.source.start(now);
+            }
+
+            updatePanner() {
+                if (!this.panner || !audioCtx) return;
+                const now = audioCtx.currentTime;
+                
+                // X 軸：左右定位 (-3 到 +3)
+                const posX = (this.x / width) * 6 - 3; 
+                // Y 軸映射到 Z 軸 (前後)： 螢幕上方(y=0) 是前方(Z = -5), 螢幕下方是後方(Z = +5)
+                const posZ = (this.y / height) * 10 - 5; 
+                const posY = 0; // 聽者平齊
+
+                if (this.panner.positionX) {
+                    this.panner.positionX.setTargetAtTime(posX, now, 0.05);
+                    this.panner.positionY.setTargetAtTime(posY, now, 0.05);
+                    this.panner.positionZ.setTargetAtTime(posZ, now, 0.05);
+                } else {
+                    this.panner.setPosition(posX, posY, posZ);
+                }
+
+                // 動態頻率變化 (Y軸越上，頻率越高)
+                if (this.source && this.type !== 'boatman') {
+                    const heightRatio = Math.max(0, Math.min(1, 1 - (this.y / height))); // 1=top, 0=bottom
+                    if (this.type === 'noise') {
+                        this.filter.frequency.setTargetAtTime(300 + heightRatio * 4000, now, 0.05);
+                    } else if (this.source.frequency) {
+                        this.source.frequency.setTargetAtTime(150 + heightRatio * 1500, now, 0.05);
+                    }
+                }
+            }
+
+            stop(fadeTime = 0.3) {
+                if (!audioCtx || !this.gain) return;
+                const now = audioCtx.currentTime;
+                this.gain.gain.cancelScheduledValues(now);
+                this.gain.gain.setValueAtTime(this.gain.gain.value || 0.0001, now);
+                this.gain.gain.exponentialRampToValueAtTime(0.0001, now + fadeTime);
+                
+                const src = this.source;
+                const plfo = this.pulseLfo;
+                setTimeout(() => {
+                    if (src) { try { src.stop(); src.disconnect(); } catch(e){} }
+                    if (plfo) { try { plfo.stop(); plfo.disconnect(); } catch(e){} }
+                }, (fadeTime + 0.1) * 1000);
+
+                this.source = null;
+                this.panner = null;
+            }
+
+            update() {
+                this.pulse += 0.1;
+                if (this.isDragging) {
+                    this.updatePanner();
+                    // 紀錄軌跡
+                    this.history.push({x: this.x, y: this.y});
+                    if (this.history.length > 20) this.history.shift();
+                } else {
+                    // 放置後軌跡消退
+                    if (this.history.length > 0) this.history.shift();
+                }
+            }
+
+            draw(ctx) {
+                // 畫軌跡
+                if (this.history.length > 1) {
+                    ctx.beginPath();
+                    ctx.moveTo(this.history[0].x, this.history[0].y);
+                    for (let i = 1; i < this.history.length; i++) {
+                        ctx.lineTo(this.history[i].x, this.history[i].y);
+                    }
+                    ctx.strokeStyle = `rgba(${this.rgb}, ${this.isDragging ? 0.6 : 0.2})`;
+                    ctx.lineWidth = 4;
+                    ctx.lineCap = 'round';
+                    ctx.stroke();
+                }
+
+                const alpha = this.isDragging ? 1.0 : 0.3;
+                const currentSize = this.isDragging ? this.size * 1.2 : this.size;
+                drawGeometry(ctx, this.type, this.x, this.y, currentSize, this.rgb, alpha, this.pulse);
+            }
+        }
+
+        // --- 初始化與佈局 ---
+        function initLayout() {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+            
+            // 設定調色盤位置 (右上角)
+            const pX = width - 50;
+            paletteIcons = [
+                { typeConfig: WAVE_TYPES.SINE, x: pX, y: 60 },
+                { typeConfig: WAVE_TYPES.TRIANGLE, x: pX, y: 130 },
+                { typeConfig: WAVE_TYPES.NOISE, x: pX, y: 200 },
+                { typeConfig: WAVE_TYPES.BOATMAN, x: pX, y: 270 }
+            ];
+        }
+
+        // --- 場景視覺繪製 ---
+        function drawSceneBackground() {
+            if (currentScene === 'bathroom') {
+                ctx.fillStyle = 'rgba(15, 25, 30, 0.4)'; ctx.fillRect(0, 0, width, height);
+                // 磁磚網格感
+                ctx.strokeStyle = 'rgba(255,255,255,0.02)'; ctx.lineWidth = 1;
+                for(let i=0; i<width; i+=40) { ctx.beginPath(); ctx.moveTo(i,0); ctx.lineTo(i,height); ctx.stroke(); }
+                for(let i=0; i<height; i+=40) { ctx.beginPath(); ctx.moveTo(0,i); ctx.lineTo(width,i); ctx.stroke(); }
+            } 
+            else if (currentScene === 'station') {
+                ctx.fillStyle = 'rgba(30, 20, 10, 0.4)'; ctx.fillRect(0, 0, width, height);
+                // 透視建築線條
+                ctx.strokeStyle = 'rgba(255,200,100,0.03)'; ctx.lineWidth = 2;
+                const cx = width/2, cy = height/3;
+                for(let i=-width; i<width*2; i+=100) { ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(i, height); ctx.stroke(); }
+            }
+            else if (currentScene === 'cave') {
+                ctx.fillStyle = 'rgba(10, 5, 15, 0.5)'; ctx.fillRect(0, 0, width, height);
+                // 暗沈暈影
+                const grad = ctx.createRadialGradient(width/2, height/2, height*0.2, width/2, height/2, height);
+                grad.addColorStop(0, 'transparent'); grad.addColorStop(1, 'rgba(0,0,0,0.8)');
+                ctx.fillStyle = grad; ctx.fillRect(0, 0, width, height);
+            }
+            else if (currentScene === 'forest') {
+                ctx.fillStyle = 'rgba(10, 25, 10, 0.4)'; ctx.fillRect(0, 0, width, height);
+                // 垂直樹幹感
+                ctx.fillStyle = 'rgba(100, 255, 100, 0.02)';
+                for(let i=0; i<10; i++) { ctx.fillRect(Math.random()*width, 0, 10+Math.random()*40, height); }
+            }
+        }
+
+        function animate() {
+            // 清除並繪製背景
+            drawSceneBackground();
+
+            // 繪製調色盤區 (來源圖示)
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
+            ctx.fillRect(width - 90, 0, 90, 320);
+            
+            paletteIcons.forEach(p => {
+                drawGeometry(ctx, p.typeConfig.id, p.x, p.y, 15, p.typeConfig.color, 0.8, Date.now()*0.005);
+            });
+
+            // 更新與繪製所有拖曳物件
+            for (let i = activeObjects.length - 1; i >= 0; i--) {
+                const obj = activeObjects[i];
+                obj.update();
+                obj.draw(ctx);
+            }
+
+            requestAnimationFrame(animate);
+        }
+
+        // --- 多點觸控互動邏輯 ---
+        function getDistance(x1, y1, x2, y2) {
+            return Math.sqrt((x1-x2)**2 + (y1-y2)**2);
+        }
+
+        window.addEventListener('pointerdown', (e) => {
+            if (e.target.tagName === 'BUTTON') return;
+            initAudio();
+
+            const pt = { x: e.clientX, y: e.clientY };
+            
+            // 1. 檢查是否點擊到「已經在畫面上」的物件
+            for (let i = activeObjects.length - 1; i >= 0; i--) {
+                const obj = activeObjects[i];
+                if (!obj.isDragging && getDistance(pt.x, pt.y, obj.x, obj.y) < 40) {
+                    // 抓起現有物件
+                    obj.isDragging = true;
+                    obj.pointerId = e.pointerId;
+                    activePointers.set(e.pointerId, obj);
+                    obj.play();
+                    
+                    // 移到陣列最後面 (繪製在最上層)
+                    activeObjects.push(activeObjects.splice(i, 1)[0]);
+                    return;
+                }
+            }
+
+            // 2. 檢查是否點擊到「右上角調色盤」，生成新物件
+            for (let i = 0; i < paletteIcons.length; i++) {
+                const p = paletteIcons[i];
+                if (getDistance(pt.x, pt.y, p.x, p.y) < 40) {
+                    const newObj = new DraggableSound(p.typeConfig, pt.x, pt.y);
+                    newObj.isDragging = true;
+                    newObj.pointerId = e.pointerId;
+                    
+                    // 限制畫面總物件數量，避免效能崩潰
+                    if (activeObjects.length >= MAX_OBJECTS) {
+                        const oldObj = activeObjects.shift(); // 移除最舊的
+                        oldObj.stop();
+                    }
+                    
+                    activeObjects.push(newObj);
+                    activePointers.set(e.pointerId, newObj);
+                    newObj.play();
+                    return;
+                }
+            }
+        });
+
+        window.addEventListener('pointermove', (e) => {
+            if (activePointers.has(e.pointerId)) {
+                const obj = activePointers.get(e.pointerId);
+                obj.x = e.clientX;
+                obj.y = e.clientY;
+            }
+        });
+
+        function handlePointerUp(e) {
+            if (activePointers.has(e.pointerId)) {
+                const obj = activePointers.get(e.pointerId);
+                obj.isDragging = false;
+                obj.pointerId = null;
+                obj.stop(); // 停止發聲，但保留視覺在畫面上
+                activePointers.delete(e.pointerId);
+            }
+        }
+
+        window.addEventListener('pointerup', handlePointerUp);
+        window.addEventListener('pointercancel', handlePointerUp);
+        window.addEventListener('resize', initLayout);
+
+        // 啟動
+        initLayout();
+        animate();
+    </script>
+</body>
+</html>
