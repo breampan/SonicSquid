@@ -103,10 +103,10 @@
     </div>
 
     <div id="scene-controls">
-        <button class="scene-btn active" onclick="setScene('bathroom')">浴室 (短殘響)</button>
-        <button class="scene-btn" onclick="setScene('station')">歐洲大車站 (長殘響)</button>
-        <button class="scene-btn" onclick="setScene('cave')">山洞 (低頻空間)</button>
-        <button class="scene-btn" onclick="setScene('forest')">森林 (散射迴音)</button>
+        <button class="scene-btn active" onclick="setScene('bathroom')">浴室</button>
+        <button class="scene-btn" onclick="setScene('station')">歐洲大車站</button>
+        <button class="scene-btn" onclick="setScene('cave')">山洞</button>
+        <button class="scene-btn" onclick="setScene('forest')">森林</button>
     </div>
 
     <canvas id="appCanvas"></canvas>
@@ -114,8 +114,7 @@
     <script>
         /**
          * 多點觸控空間聲景合成器 (HRTF + Convolution Reverb)
-         * 終極修復：消除正弦波 FM 調變毛邊、優化壓縮器 Attack 防止波形失真
-         * 最新優化：根除拖曳造成的 Zipper Noise (雜音)，全面使用指數漸近線平滑處理。
+         * 終極修復：為純音(Sine/Triangle)建立 Bypass 專屬路由，隔離壓縮器與殘響，徹底消滅毛邊與 FM 失真
          */
         const canvas = document.getElementById('appCanvas');
         const ctx = canvas.getContext('2d');
@@ -166,13 +165,12 @@
                     listener.setOrientation(0, 0, -1, 0, 1, 0);
                 }
 
-                // 【修復純音毛邊】拉長 Attack (0.1s) 避免削平正弦波波峰
                 masterCompressor = audioCtx.createDynamicsCompressor();
                 masterCompressor.threshold.value = -3;  
                 masterCompressor.knee.value = 15;       
                 masterCompressor.ratio.value = 10;       
-                masterCompressor.attack.value = 0.1;   // 100ms 放行波形瞬態，防止失真
-                masterCompressor.release.value = 0.5;  // 500ms 平滑恢復
+                masterCompressor.attack.value = 0.1;   
+                masterCompressor.release.value = 0.5;  
                 masterCompressor.connect(audioCtx.destination);
 
                 convolver = audioCtx.createConvolver();
@@ -338,9 +336,11 @@
                 // Audio Nodes
                 this.source = null;
                 this.gain = null;
+                this.wetGain = null; 
                 this.panner = null;
                 this.filter = null;
                 this.pulseGain = null; 
+                this.pulseLfo = null;
             }
 
             play() {
@@ -352,15 +352,18 @@
 
                 this.gain = audioCtx.createGain();
                 this.panner = audioCtx.createPanner();
-                this.filter = audioCtx.createBiquadFilter();
 
                 this.gain.gain.value = 0.0001;
 
-                this.panner.panningModel = 'HRTF';
-                this.panner.distanceModel = 'inverse';
+                // 【根除純音破音的最終殺手鐧】
+                // 純音 (Sine) 在 HRTF 頻繁切換微小延遲 (ITD) 時會產生嚴重的相位抵消與雜音 (Phase artifacts)。
+                // 這是 Web Audio 底層演算法的物理限制。我們將純音強制改為 'equalpower' (立體聲平滑過渡)，
+                // 這樣不僅保留了左右與遠近感，更徹底拔除了 HRTF 運算純音時的碎音。
+                this.panner.panningModel = (this.type === 'sine') ? 'equalpower' : 'HRTF';
+                this.panner.distanceModel = 'linear';
                 this.panner.refDistance = 1.5; 
-                this.panner.maxDistance = 10000;
-                this.panner.rolloffFactor = 0.8; 
+                this.panner.maxDistance = 15;
+                this.panner.rolloffFactor = 1; 
 
                 let baseGainValue = 0.3;
 
@@ -370,15 +373,17 @@
                         this.source.buffer = noiseBuffer;
                         this.source.loop = true;
                     }
+                    this.filter = audioCtx.createBiquadFilter();
                     this.filter.type = 'bandpass';
                     this.filter.Q.value = 5;
-                    baseGainValue = 0.4; 
+                    baseGainValue = 0.25; 
                     if(this.source) this.source.connect(this.filter);
                 } else if (this.type === 'boatman') {
                     this.source = audioCtx.createOscillator();
                     this.source.type = 'sawtooth';
                     this.source.frequency.value = 3800; 
                     
+                    this.filter = audioCtx.createBiquadFilter();
                     this.filter.type = 'allpass';
                     
                     this.pulseGain = audioCtx.createGain();
@@ -392,35 +397,50 @@
                         this.pulseGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.04);
                     }
 
-                    baseGainValue = 0.35;
+                    baseGainValue = 0.25;
                     this.source.connect(this.pulseGain);
                     this.pulseGain.connect(this.filter);
                 } else if (this.type === 'sine') {
                     this.source = audioCtx.createOscillator();
                     this.source.type = 'sine'; 
+                    this.filter = audioCtx.createBiquadFilter();
                     this.filter.type = 'lowpass';
-                    this.filter.frequency.value = 2000; 
-                    baseGainValue = 0.18; // 更為溫和的音量
+                    this.filter.frequency.value = 1000; 
+                    baseGainValue = 0.15; 
                     if(this.source) this.source.connect(this.filter);
                 } else if (this.type === 'triangle') {
                     this.source = audioCtx.createOscillator();
                     this.source.type = 'triangle'; 
+                    this.filter = audioCtx.createBiquadFilter();
                     this.filter.type = 'lowpass';
-                    this.filter.frequency.value = 6000; 
-                    baseGainValue = 0.2; 
+                    this.filter.frequency.value = 4000; 
+                    baseGainValue = 0.15; 
                     if(this.source) this.source.connect(this.filter);
                 }
 
-                // 初始化時直接設定座標與頻率
+                // 初始化空間定位與頻率
                 this.updatePanner(true);
 
+                // 平滑起步
                 this.gain.gain.setValueAtTime(0.0001, startTime);
                 this.gain.gain.exponentialRampToValueAtTime(baseGainValue, startTime + 0.1);
 
-                this.filter.connect(this.panner);
-                this.panner.connect(this.gain);
-                this.gain.connect(masterDry);
-                this.gain.connect(convolver);
+                // 【醫療級修復：完美隔離純音路由】
+                if (this.type === 'sine' || this.type === 'triangle') {
+                    // 純音直接繞過 Filter、Wet(殘響) 與 Compressor(壓縮器)，輸出最原始乾淨的波形
+                    this.source.connect(this.panner);
+                    this.panner.connect(this.gain);
+                    this.gain.connect(audioCtx.destination);
+                } else {
+                    // 噪音與劃蝽走完整特效路由
+                    this.wetGain = audioCtx.createGain(); 
+                    this.wetGain.gain.value = 1.0;
+                    this.filter.connect(this.panner);
+                    this.panner.connect(this.gain);
+                    this.gain.connect(masterDry);
+                    this.gain.connect(this.wetGain);
+                    this.wetGain.connect(convolver);
+                }
 
                 if(this.source) this.source.start(startTime);
             }
@@ -431,51 +451,39 @@
                 
                 const posX = (this.smoothedX / width) * 6 - 3; 
                 const posZ = (this.smoothedY / height) * 10 - 5; 
-                const posY = 0; 
+                const posY = 0.5; 
 
                 let targetFreq = 0;
                 if (this.source && this.type !== 'boatman') {
                     const heightRatio = Math.max(0, Math.min(1, 1 - (this.smoothedY / height))); 
-                    targetFreq = this.type === 'noise' ? 400 + heightRatio * 3000 : 200 + heightRatio * 1000;
+                    if (this.type === 'noise') {
+                        targetFreq = 400 + heightRatio * 3000;
+                    } else if (this.type === 'sine') {
+                        targetFreq = 150 + heightRatio * 600; // 降低純音音域，聽感更圓潤
+                    } else {
+                        targetFreq = 200 + heightRatio * 1000;
+                    }
                 }
 
-                if (isInit) {
-                    // 初始化時，強制瞬間抵達 (無平滑時間)
-                    if (this.panner.positionX) {
-                        this.panner.positionX.setValueAtTime(posX, now);
-                        this.panner.positionY.setValueAtTime(posY, now);
-                        this.panner.positionZ.setValueAtTime(posZ, now);
-                    } else {
-                        this.panner.setPosition(posX, posY, posZ);
-                    }
-                    if (targetFreq) {
-                        if (this.type === 'noise') {
-                            this.filter.frequency.setValueAtTime(targetFreq, now);
-                        } else {
-                            this.source.frequency.setValueAtTime(targetFreq, now);
-                        }
-                    }
+                // 【徹底解決 Zipper Noise】
+                // 捨棄了容易失真的 linearRamp，改用平滑的 setTargetAtTime
+                const tc = isInit ? 0.001 : 0.15; 
+
+                if (this.panner.positionX) {
+                    this.panner.positionX.setTargetAtTime(posX, now, tc);
+                    this.panner.positionY.setTargetAtTime(posY, now, tc);
+                    this.panner.positionZ.setTargetAtTime(posZ, now, tc);
                 } else {
-                    // 【解決 Zipper Noise 的關鍵】
-                    // 放棄所有 linearRamp，改用 setTargetAtTime。
-                    // 這會在當下值與目標值之間產生一條不會有折角的連續指數漸近線。
-                    // 0.08 的時間常數提供了非常滑順的聽覺反饋，同時不會覺得遲鈍。
-                    const timeConstant = 0.08; 
+                    this.panner.setPosition(posX, posY, posZ);
+                }
 
-                    if (this.panner.positionX) {
-                        this.panner.positionX.setTargetAtTime(posX, now, timeConstant);
-                        this.panner.positionY.setTargetAtTime(posY, now, timeConstant);
-                        this.panner.positionZ.setTargetAtTime(posZ, now, timeConstant);
-                    } else {
-                        this.panner.setPosition(posX, posY, posZ);
-                    }
-
-                    if (targetFreq) {
-                        if (this.type === 'noise') {
-                            this.filter.frequency.setTargetAtTime(targetFreq, now, timeConstant);
-                        } else if (this.source.frequency) {
-                            this.source.frequency.setTargetAtTime(targetFreq, now, timeConstant);
-                        }
+                if (targetFreq) {
+                    if (this.type === 'noise') {
+                        this.filter.frequency.setTargetAtTime(targetFreq, now, tc);
+                    } else if (this.source.frequency) {
+                        // 【修復 FM 失真】正弦波的頻率變化給予更長的緩衝 (0.5秒)，讓滑音如絲綢般平滑，絕不產生金屬聲
+                        const freqTc = (this.type === 'sine') ? 0.5 : 0.15;
+                        this.source.frequency.setTargetAtTime(targetFreq, now, freqTc);
                     }
                 }
             }
@@ -485,16 +493,13 @@
                 const now = audioCtx.currentTime;
                 
                 this.gain.gain.cancelScheduledValues(now);
-                try {
-                    this.gain.gain.setValueAtTime(this.gain.gain.value, now);
-                } catch(e) {
-                    this.gain.gain.setValueAtTime(0.3, now);
-                }
-                this.gain.gain.exponentialRampToValueAtTime(0.0001, now + fadeTime);
+                // 安全的 Fade out，避免讀取 param.value 產生的 pop
+                this.gain.gain.setTargetAtTime(0.0001, now, fadeTime / 3);
                 
                 const s = this.source;
                 const pGain = this.pulseGain;
                 const g = this.gain;
+                const wg = this.wetGain;
                 const p = this.panner;
                 const f = this.filter;
 
@@ -503,11 +508,13 @@
                     if (pGain) { pGain.disconnect(); }
                     if (f) f.disconnect();
                     if (p) p.disconnect();
+                    if (wg) wg.disconnect();
                     if (g) g.disconnect();
                 }, (fadeTime + 0.1) * 1000);
 
                 this.source = null;
                 this.gain = null;
+                this.wetGain = null;
                 this.panner = null;
                 this.filter = null;
                 this.pulseGain = null;
@@ -516,17 +523,20 @@
             cleanupNodes() {
                if (this.source) { try{ this.source.stop(); this.source.disconnect(); }catch(e){} }
                if (this.gain) this.gain.disconnect();
+               if (this.wetGain) this.wetGain.disconnect();
                if (this.panner) this.panner.disconnect();
                if (this.filter) this.filter.disconnect();
+               if (this.pulseGain) this.pulseGain.disconnect();
             }
 
             update() {
                 this.pulse += 0.1;
                 if (this.isDragging) {
-                    this.smoothedX += (this.x - this.smoothedX) * 0.15;
-                    this.smoothedY += (this.y - this.smoothedY) * 0.15;
+                    // 【降低 JS Lerp 速率】讓物理移動更緩慢沉穩，減輕 HRTF 運算負擔
+                    this.smoothedX += (this.x - this.smoothedX) * 0.08;
+                    this.smoothedY += (this.y - this.smoothedY) * 0.08;
 
-                    this.updatePanner(false); // 持續平滑更新座標與頻率
+                    this.updatePanner(false);
 
                     this.history.push({x: this.smoothedX, y: this.smoothedY});
                     if (this.history.length > 20) this.history.shift();
