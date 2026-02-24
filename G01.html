@@ -114,7 +114,7 @@
     <script>
         /**
          * 多點觸控空間聲景合成器 (HRTF + Convolution Reverb)
-         * 修復：消除低頻純音被壓縮器追蹤失真的毛邊、解決高頻率滑鼠事件造成的 Zipper Noise
+         * 終極修復：消除正弦波 FM 調變毛邊、優化壓縮器 Attack 防止波形失真
          */
         const canvas = document.getElementById('appCanvas');
         const ctx = canvas.getContext('2d');
@@ -165,13 +165,13 @@
                     listener.setOrientation(0, 0, -1, 0, 1, 0);
                 }
 
-                // 【修復純音毛邊】拉長壓縮器的 Attack 與 Release，調高 Threshold，避免對低頻波形做逐波壓縮失真
+                // 【修復純音毛邊】拉長 Attack (0.1s) 避免削平正弦波波峰
                 masterCompressor = audioCtx.createDynamicsCompressor();
-                masterCompressor.threshold.value = -3;  // 只在快要破音時才介入
-                masterCompressor.knee.value = 10;       
-                masterCompressor.ratio.value = 12;       
-                masterCompressor.attack.value = 0.03;   // 放慢至 30ms，避開低頻週期
-                masterCompressor.release.value = 0.25;  // 250ms 平滑釋放
+                masterCompressor.threshold.value = -3;  
+                masterCompressor.knee.value = 15;       
+                masterCompressor.ratio.value = 10;       
+                masterCompressor.attack.value = 0.1;   // 100ms 放行波形瞬態，防止失真
+                masterCompressor.release.value = 0.5;  // 500ms 平滑恢復
                 masterCompressor.connect(audioCtx.destination);
 
                 convolver = audioCtx.createConvolver();
@@ -209,7 +209,6 @@
             const frameCount = Math.floor(sampleRate * length);
             const buffer = audioCtx.createBuffer(2, frameCount, sampleRate);
             
-            // 【修復殘響毛刺感】精確的一階 RC 低通濾波器 Alpha 係數
             const filterAlpha = Math.min(1.0, (2 * Math.PI * lpFreq) / sampleRate);
 
             for (let channel = 0; channel < 2; channel++) {
@@ -221,7 +220,6 @@
                     
                     let noise = (Math.random() * 2 - 1);
                     
-                    // 應用準確的低通濾波，讓殘響的白噪音變得滑順
                     lastVal += filterAlpha * (noise - lastVal);
                     let filteredNoise = lastVal;
 
@@ -240,7 +238,6 @@
             if (buffer) convolver.buffer = buffer;
 
             const now = audioCtx.currentTime;
-            // 降低 Wet 比例，保護純音不被過度污染
             if (scene === 'bathroom') { masterDry.gain.setTargetAtTime(0.8, now, 0.1); masterWet.gain.setTargetAtTime(0.2, now, 0.1); }
             else if (scene === 'station') { masterDry.gain.setTargetAtTime(0.7, now, 0.1); masterWet.gain.setTargetAtTime(0.4, now, 0.1); }
             else if (scene === 'cave') { masterDry.gain.setTargetAtTime(0.6, now, 0.1); masterWet.gain.setTargetAtTime(0.5, now, 0.1); }
@@ -336,7 +333,6 @@
                 this.pointerId = null;
                 this.pulse = 0;
                 this.history = []; 
-                this.lastAudioUpdateTime = 0; // 用於節流排程
                 
                 // Audio Nodes
                 this.source = null;
@@ -398,12 +394,21 @@
                     baseGainValue = 0.35;
                     this.source.connect(this.pulseGain);
                     this.pulseGain.connect(this.filter);
-                } else {
+                } else if (this.type === 'sine') {
+                    // 【正弦波特調】降低音量，並過濾高頻避免激發殘響毛刺
                     this.source = audioCtx.createOscillator();
-                    this.source.type = this.type; 
+                    this.source.type = 'sine'; 
                     this.filter.type = 'lowpass';
-                    this.filter.frequency.value = 8000;
-                    baseGainValue = 0.35; // 給純音稍微足夠的基底
+                    this.filter.frequency.value = 2000; 
+                    baseGainValue = 0.18; // 更為溫和的音量
+                    if(this.source) this.source.connect(this.filter);
+                } else if (this.type === 'triangle') {
+                    // 三角波
+                    this.source = audioCtx.createOscillator();
+                    this.source.type = 'triangle'; 
+                    this.filter.type = 'lowpass';
+                    this.filter.frequency.value = 6000; 
+                    baseGainValue = 0.2; 
                     if(this.source) this.source.connect(this.filter);
                 }
 
@@ -429,46 +434,26 @@
                 const posZ = (this.smoothedY / height) * 10 - 5; 
                 const posY = 0; 
 
-                let targetFreq = 0;
-                if (this.source && this.type !== 'boatman') {
-                    const heightRatio = Math.max(0, Math.min(1, 1 - (this.smoothedY / height))); 
-                    targetFreq = this.type === 'noise' ? 400 + heightRatio * 3000 : 200 + heightRatio * 1000;
+                // 【修復純音拖曳失真】放棄 linearRamp，全面改用 setTargetAtTime
+                // 0.05 的時間常數提供了絕佳的平滑度，杜絕 FM 側波失真
+                const tc = isInit ? 0.001 : 0.05; 
+
+                if (this.panner.positionX) {
+                    this.panner.positionX.setTargetAtTime(posX, now, tc);
+                    this.panner.positionY.setTargetAtTime(posY, now, tc);
+                    this.panner.positionZ.setTargetAtTime(posZ, now, tc);
+                } else {
+                    this.panner.setPosition(posX, posY, posZ);
                 }
 
-                if (isInit) {
-                    // 初始化時直接設定
-                    if (this.panner.positionX) {
-                        this.panner.positionX.setValueAtTime(posX, now);
-                        this.panner.positionY.setValueAtTime(posY, now);
-                        this.panner.positionZ.setValueAtTime(posZ, now);
-                    } else {
-                        this.panner.setPosition(posX, posY, posZ);
-                    }
-                    if (targetFreq) {
-                        if (this.type === 'noise') this.filter.frequency.setValueAtTime(targetFreq, now);
-                        else this.source.frequency.setValueAtTime(targetFreq, now);
-                    }
-                    this.lastAudioUpdateTime = now;
-                } else {
-                    // 【修復滑動 Zipper Noise】每 30 毫秒進行一次線性漸進排程，確保波形頻率過渡完美平滑
-                    if (now - this.lastAudioUpdateTime > 0.03) {
-                        const rampTime = now + 0.04;
-                        if (this.panner.positionX) {
-                            this.panner.positionX.linearRampToValueAtTime(posX, rampTime);
-                            this.panner.positionY.linearRampToValueAtTime(posY, rampTime);
-                            this.panner.positionZ.linearRampToValueAtTime(posZ, rampTime);
-                        } else {
-                            this.panner.setPosition(posX, posY, posZ);
-                        }
-
-                        if (targetFreq) {
-                            if (this.type === 'noise') {
-                                this.filter.frequency.linearRampToValueAtTime(targetFreq, rampTime);
-                            } else {
-                                this.source.frequency.linearRampToValueAtTime(targetFreq, rampTime);
-                            }
-                        }
-                        this.lastAudioUpdateTime = now;
+                if (this.source && this.type !== 'boatman') {
+                    const heightRatio = Math.max(0, Math.min(1, 1 - (this.smoothedY / height))); 
+                    let targetFreq = this.type === 'noise' ? 400 + heightRatio * 3000 : 200 + heightRatio * 1000;
+                    
+                    if (this.type === 'noise') {
+                        this.filter.frequency.setTargetAtTime(targetFreq, now, tc);
+                    } else if (this.source.frequency) {
+                        this.source.frequency.setTargetAtTime(targetFreq, now, tc);
                     }
                 }
             }
