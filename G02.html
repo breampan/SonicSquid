@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>聽能定向訓練系統 - 終極整合版</title>
+    <title>聽能定向訓練系統</title>
     <style>
         body, html {
             margin: 0; padding: 0; width: 100%; height: 100%;
@@ -77,11 +77,10 @@
 
     <script>
         /**
-         * 聽能定向訓練系統 - 終極整合版
-         * 修復：
-         * 1. 成績重置：切換模式時總積分歸 0，確保每次挑戰都是新的開始。
-         * 2. 噪音衰減優化：優化線性增益曲線，確保挑戰模式中音量持久穩定。
-         * 3. 極致流暢：整合 Lerp 座標插值 (0.22) 與 0.18s 參數平滑，徹底根除純音 FM 雜音。
+         * 聽能定向訓練系統
+         * 1. 專業優化：座標插值 (Lerp) 配合長平滑常數 (tc=0.22s) 徹底解決純音 FM 雜音。
+         * 2. 挑戰流程：清空沙盒、成績歸零、準備指引、揭曉解盲、軌跡複習。
+         * 3. 聲學物理：手動增益補償，排除 PannerNode 自動衰減產生的死區。
          */
         const canvas = document.getElementById('appCanvas');
         const ctx = canvas.getContext('2d');
@@ -108,7 +107,7 @@
         };
 
         let isChallengeMode = false;
-        let challengeState = 'idle'; // idle, preparing, listening, waiting_for_guess, feedback, replaying
+        let challengeState = 'idle'; 
         let totalScore = 0;
         let challengeTarget = null;
         let lastGuessX = 0, lastGuessY = 0;
@@ -176,19 +175,16 @@
             const fbUI = document.getElementById('feedback-controls');
             const hint = document.getElementById('challenge-hint');
             
-            // 模式切換時強制清空所有現有物件
             clearAllObjects();
             fbUI.style.display = "none";
-
-            // 【新增】：重置成績，確保每次開啟/關閉都是新挑戰
             totalScore = 0;
             scoreDisplay.innerText = `積分: ${totalScore}`;
 
             if (isChallengeMode) {
-                btn.innerText = "退出定向模式";
+                btn.innerText = "退出訓練模式";
                 scoreDisplay.style.display = "block";
                 challengeState = 'preparing';
-                hint.innerHTML = "準備好了嗎？<br><span style='font-size:18px; color:#fff'>點擊畫面任何地方開始聽能挑戰</span>";
+                hint.innerHTML = "準備好了嗎？<br><span style='font-size:18px; color:#fff'>點擊畫面任何地方開始聽能定向挑戰</span>";
                 hint.style.opacity = 1;
             } else {
                 btn.innerText = "開啟聽能定向挑戰";
@@ -232,8 +228,8 @@
                     this.updatePanner();
                 } else {
                     challengeState = 'waiting_for_guess';
-                    this.muteChallenge(); 
-                    hint.innerHTML = "聲音消失了<br><span style='font-size:18px; color:#fff'>請點擊它最後的位置</span>";
+                    this.muteChallenge();
+                    hint.innerHTML = "聲音已停止<br><span style='font-size:18px; color:#fff'>請點擊聲源最後消失的位置</span>";
                 }
             };
             challengeTarget.play();
@@ -311,37 +307,6 @@
             ctx.restore();
         }
 
-        class FishCreature {
-            constructor(x, y, rgb) {
-                this.x = x; this.y = y; this.vx = (Math.random() - 0.5) * 4; this.vy = (Math.random() - 0.5) * 4;
-                this.rgb = rgb; this.size = Math.random() * 1.8 + 1.5; this.life = 1.0; this.decay = 0.0035;
-                setTimeout(() => this.playDeepPulse(), Math.random() * 600);
-            }
-            playDeepPulse() {
-                if (!audioCtx) return;
-                const now = audioCtx.currentTime; const osc = audioCtx.createOscillator();
-                const g = audioCtx.createGain(); const filter = audioCtx.createBiquadFilter();
-                osc.type = 'sine'; osc.frequency.setValueAtTime(45 + Math.random() * 40, now);
-                osc.frequency.exponentialRampToValueAtTime(150, now + 0.1);
-                filter.type = 'lowpass'; filter.frequency.setValueAtTime(180, now);
-                g.gain.setValueAtTime(0, now); g.gain.linearRampToValueAtTime(0.12, now + 0.02); g.gain.exponentialRampToValueAtTime(0.001, now + 0.55);
-                osc.connect(filter); filter.connect(g); g.connect(audioCtx.destination);
-                osc.start(now); osc.stop(now + 0.6);
-            }
-            update(target) {
-                if (target) {
-                    let dx = target.x - this.x; let dy = target.y - this.y; let d = Math.sqrt(dx*dx + dy*dy);
-                    if (d > 5) { this.vx += (dx / d) * 0.16 + (-dy / d) * 0.28; this.vy += (dy / d) * 0.16 + (dx / d) * 0.28; }
-                }
-                this.vx *= 0.965; this.vy *= 0.965; this.x += this.vx; this.y += this.vy; this.life -= this.decay;
-            }
-            draw(ctx) {
-                ctx.save(); ctx.translate(this.x, this.y); ctx.rotate(Math.atan2(this.vy, this.vx));
-                ctx.fillStyle = `rgba(${this.rgb}, ${Math.max(0, this.life) * 0.6})`;
-                ctx.beginPath(); ctx.moveTo(this.size * 2, 0); ctx.quadraticCurveTo(0, this.size, -this.size, 0); ctx.quadraticCurveTo(0, -this.size, this.size * 2, 0); ctx.fill(); ctx.restore();
-            }
-        }
-
         class DraggableSound {
             constructor(typeConfig, x, y) {
                 this.type = typeConfig.id; this.rgb = typeConfig.color; this.x = x; this.y = y;
@@ -360,10 +325,8 @@
                 this.gain = audioCtx.createGain(); this.sidechainGain = audioCtx.createGain(); this.panner = audioCtx.createPanner();
                 this.airFilter = audioCtx.createBiquadFilter(); this.airFilter.type = 'lowpass';
                 this.pinnaFilter = audioCtx.createBiquadFilter(); this.pinnaFilter.type = 'highshelf';
-                this.panner.panningModel = 'HRTF';
-                this.panner.distanceModel = 'inverse'; 
-                this.panner.refDistance = 1.0; 
-                this.panner.rolloffFactor = 1.8;   
+                this.panner.panningModel = (this.type === 'sine') ? 'equalpower' : 'HRTF';
+                this.panner.distanceModel = 'inverse'; this.panner.refDistance = 1.0; this.panner.rolloffFactor = 1.8;   
                 this.gain.gain.value = 0.0001;
                 if (this.type === 'sine' || this.type === 'triangle') {
                     this.source = audioCtx.createOscillator(); this.modulator = audioCtx.createOscillator(); this.modGain = audioCtx.createGain();
@@ -383,7 +346,7 @@
                 }
                 this.pinnaFilter.connect(this.airFilter); this.airFilter.connect(this.panner); this.panner.connect(this.sidechainGain); this.sidechainGain.connect(this.gain);
                 this.updatePanner(true);
-                this.gain.gain.setTargetAtTime(0.4, now + 0.05, 0.18); this.gain.connect(masterDry); this.gain.connect(convolver);
+                this.gain.gain.setTargetAtTime(0.4, now + 0.05, 0.22); this.gain.connect(masterDry); this.gain.connect(convolver);
                 this.source.start(now + 0.05);
             }
 
@@ -393,7 +356,9 @@
                 const posX = (this.smoothedX / width) * 6 - 3;
                 const distZNorm = (this.smoothedY - listenerPlaneY) / (height * 0.4 || 1);
                 const posZ = distZNorm * 4.5;
-                const tc = 0.18; 
+                
+                // 【核心修正】：增加平滑常數至 0.22s，專門修復純音 FM 拖曳雜音
+                const tc = 0.22; 
 
                 const rawDist = Math.sqrt(posX*posX + posZ*posZ);
                 if (!isInit) {
@@ -404,43 +369,31 @@
 
                 this.panner.positionX.setTargetAtTime(posX, now, tc);
                 this.panner.positionZ.setTargetAtTime(posZ, now, tc);
-                
-                const zAbs = Math.abs(distZNorm);
-                this.airFilter.frequency.setTargetAtTime(Math.max(400, 20000 - (zAbs * 18500)), now, 0.12);
+                this.airFilter.frequency.setTargetAtTime(Math.max(400, 20000 - (Math.abs(distZNorm) * 18500)), now, 0.12);
                 this.pinnaFilter.gain.setTargetAtTime(posZ < 0 ? 3.5 : -9.0, now, tc);
 
                 let volBase = 0.5 * this.life;
-                if (this.isDragging) {
-                    const proximityBoost = 1.0 + (1.0 - Math.min(1.0, zAbs)) * 1.2;
-                    volBase *= proximityBoost;
-                } else if (this.isChallengeObject) {
-                    volBase *= (1.0 + (1.0 - Math.min(1.0, zAbs)) * 0.8);
-                }
+                if (this.isDragging) volBase *= (1.0 + (1.0 - Math.min(1.0, Math.abs(distZNorm))) * 1.2);
+                else if (this.isChallengeObject) volBase *= (1.0 + (1.0 - Math.min(1.0, Math.abs(distZNorm))) * 0.9);
 
                 if (this.type === 'noise' && this.filter) {
-                    this.filter.Q.setTargetAtTime(Math.max(1.5, 25 - (zAbs * 23.5)), now, 0.2);
-                    this.filter.frequency.setTargetAtTime((4200 - (zAbs * 2500)) * this.dopplerFactor, now, 0.1);
+                    this.filter.Q.setTargetAtTime(Math.max(1.5, 25 - (Math.abs(distZNorm) * 23.5)), now, 0.2);
+                    this.filter.frequency.setTargetAtTime((4200 - (Math.abs(distZNorm) * 2500)) * this.dopplerFactor, now, 0.1);
                     this.gain.gain.setTargetAtTime(volBase, now, tc);
                 } else if ((this.type === 'sine' || this.type === 'triangle') && this.modulator) {
                     const xRatio = (this.smoothedX / width);
-                    this.modulator.frequency.setTargetAtTime(0.5 + xRatio * (this.type === 'sine' ? 80 : 150), now, 0.2);
-                    this.modGain.gain.setTargetAtTime(Math.max(0, (1 - zAbs) * (this.type === 'sine' ? 120 : 250) * this.life), now, 0.2);
+                    this.modulator.frequency.setTargetAtTime(0.5 + xRatio * (this.type === 'sine' ? 80 : 150), now, tc);
+                    this.modGain.gain.setTargetAtTime(Math.max(0, (1 - Math.abs(distZNorm)) * (this.type === 'sine' ? 120 : 250) * this.life), now, tc);
                     const h = Math.max(0, Math.min(1, 1 - (this.smoothedY / height)));
-                    this.source.frequency.setTargetAtTime((180 + h * 450) * this.dopplerFactor, now, 0.1);
+                    this.source.frequency.setTargetAtTime((180 + h * 450) * this.dopplerFactor, now, tc);
                     this.gain.gain.setTargetAtTime(volBase * 1.15, now, tc);
                 } else { 
                     this.gain.gain.setTargetAtTime(volBase, now, tc); 
                 }
             }
 
-            muteChallenge() { 
-                if (this.gain) {
-                    this.gain.gain.cancelScheduledValues(audioCtx.currentTime);
-                    this.gain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.6); 
-                }
-            }
-            
-            cleanup() { if(this.source) { try { this.source.stop(audioCtx.currentTime + 0.2); if(this.modulator) this.modulator.stop(audioCtx.currentTime + 0.2); if(this.lfo) this.lfo.stop(audioCtx.currentTime + 0.2); } catch(e) {} } this.source = null; }
+            muteChallenge() { if (this.gain) { this.gain.gain.cancelScheduledValues(audioCtx.currentTime); this.gain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.6); } }
+            cleanup() { if(this.source) { try { this.source.stop(audioCtx.currentTime + 0.25); if(this.modulator) this.modulator.stop(audioCtx.currentTime + 0.25); if(this.lfo) this.lfo.stop(audioCtx.currentTime + 0.25); } catch(e) {} } this.source = null; }
             
             update() {
                 this.pulse += 0.08;
@@ -449,7 +402,6 @@
                     this.smoothedX += (this.x - this.smoothedX) * 0.22;
                     this.smoothedY += (this.y - this.smoothedY) * 0.22;
                     this.updatePanner(); 
-                    if (Math.random() > 0.95) fishParticles.push(new FishCreature(this.x, this.y, this.rgb));
                 }
                 else if (this.isChallengeObject && challengeState === 'listening') {
                     this.updateCustomPath();
