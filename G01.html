@@ -114,7 +114,7 @@
     <script>
         /**
          * 多點觸控空間聲景合成器 (HRTF + Convolution Reverb)
-         * 更新：修復噪音、還原劃蝽音色、加入 Compressor 防爆音、平滑化參數更新
+         * 重點優化：去除所有 Zipper Noise、平滑化參數、優化動態壓縮器
          */
         const canvas = document.getElementById('appCanvas');
         const ctx = canvas.getContext('2d');
@@ -125,7 +125,7 @@
         let convolver;
         let masterDry;
         let masterWet;
-        let masterCompressor; // 全域壓縮器
+        let masterCompressor; 
         let currentScene = 'bathroom';
         let isAudioInitialized = false;
         let noiseBuffer = null;
@@ -136,7 +136,6 @@
         let paletteIcons = [];  
         const activePointers = new Map(); 
 
-        // 定義四種波形視覺與聲學屬性
         const WAVE_TYPES = {
             SINE: { id: 'sine', color: '100, 220, 255', label: '圓球' },
             TRIANGLE: { id: 'triangle', color: '255, 204, 170', label: '三角錐' },
@@ -144,10 +143,9 @@
             BOATMAN: { id: 'boatman', color: '255, 85, 68', label: '幾何劃蝽' }
         };
 
-        // --- 建立白噪音 Buffer ---
         function createNoiseBuffer() {
             if (!audioCtx) return;
-            const bufferSize = audioCtx.sampleRate * 2; // 2 秒的 buffer
+            const bufferSize = audioCtx.sampleRate * 2; 
             noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
             const output = noiseBuffer.getChannelData(0);
             for (let i = 0; i < bufferSize; i++) {
@@ -155,12 +153,10 @@
             }
         }
 
-        // --- 音訊系統初始化 ---
         function initAudio() {
             if (isAudioInitialized) return;
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             
-            // HRTF 聽者設定
             const listener = audioCtx.listener;
             if (listener.positionX) {
                 listener.positionX.value = 0; listener.positionY.value = 0; listener.positionZ.value = 0;
@@ -170,21 +166,19 @@
                 listener.setOrientation(0, 0, -1, 0, 1, 0);
             }
 
-            // 建立全域壓縮器 (Limiter/Compressor) 防止 Clipping
+            // 建立全域壓縮器 (限制器)，保護耳朵不爆音
             masterCompressor = audioCtx.createDynamicsCompressor();
-            masterCompressor.threshold.value = -3; // 閾值，超過 -3dB 開始壓縮
-            masterCompressor.knee.value = 10;
-            masterCompressor.ratio.value = 12;     // 壓縮比，較大以作為 Limiter
-            masterCompressor.attack.value = 0.003; // 極快反應
-            masterCompressor.release.value = 0.25;
+            masterCompressor.threshold.value = -6; // 提早開始壓縮
+            masterCompressor.knee.value = 12;
+            masterCompressor.ratio.value = 15;     
+            masterCompressor.attack.value = 0.01;  // 放慢 Attack 避免低頻失真
+            masterCompressor.release.value = 0.1;  // 平滑 Release
             masterCompressor.connect(audioCtx.destination);
 
-            // 建立 Reverb (Convolver) 與 Dry/Wet 節點
             convolver = audioCtx.createConvolver();
             masterDry = audioCtx.createGain();
             masterWet = audioCtx.createGain();
             
-            // 路由：Dry 和 Wet 都進入壓縮器
             masterDry.connect(masterCompressor);
             convolver.connect(masterWet);
             masterWet.connect(masterCompressor);
@@ -194,7 +188,6 @@
             isAudioInitialized = true;
         }
 
-        // --- 即時合成 Impulse Response (IR) ---
         function generateIR(sceneType) {
             if (!audioCtx) return null;
             const sampleRate = audioCtx.sampleRate;
@@ -305,7 +298,6 @@
             ctx.restore();
         }
 
-
         // --- 可拖曳音源類別 ---
         class DraggableSound {
             constructor(typeConfig, x, y) {
@@ -313,38 +305,38 @@
                 this.rgb = typeConfig.color;
                 this.x = x;
                 this.y = y;
+                // 用於平滑處理 HRTF 定位
+                this.smoothedX = x;
+                this.smoothedY = y;
                 this.size = 20;
                 this.isDragging = false;
                 this.pointerId = null;
                 this.pulse = 0;
-                
                 this.history = []; 
+                this.lastAudioUpdateTime = 0; // 用於節流參數更新
                 
                 // Audio Nodes
                 this.source = null;
                 this.gain = null;
                 this.panner = null;
                 this.filter = null;
-                this.pulseLfo = null; // for boatman
-                this.pulseGain = null; // for boatman
+                this.pulseLfo = null; 
+                this.pulseGain = null; 
             }
 
             play() {
                 if (!audioCtx) return;
-                this.cleanupNodes(); // 確保乾淨啟動
+                this.cleanupNodes(); 
 
                 const now = audioCtx.currentTime;
-                // 加入一點延遲，避免多個物件同時發聲的瞬間峰值
-                const startTime = now + 0.05; 
+                const startTime = now + 0.05; // 微小預延遲防止啟動爆音
 
                 this.gain = audioCtx.createGain();
                 this.panner = audioCtx.createPanner();
                 this.filter = audioCtx.createBiquadFilter();
 
-                // HRTF 設定
                 this.panner.panningModel = 'HRTF';
                 this.panner.distanceModel = 'inverse';
-                // 減少距離縮放帶來的極端音量變化
                 this.panner.refDistance = 1.5; 
                 this.panner.maxDistance = 10000;
                 this.panner.rolloffFactor = 0.8; 
@@ -352,9 +344,8 @@
                 // 初始空間定位
                 this.updatePanner(startTime, true);
 
-                let baseGainValue = 0.3; // 預設音量
+                let baseGainValue = 0.3;
 
-                // 根據波形產生聲音
                 if (this.type === 'noise') {
                     if (noiseBuffer) {
                         this.source = audioCtx.createBufferSource();
@@ -363,13 +354,12 @@
                     }
                     this.filter.type = 'bandpass';
                     this.filter.Q.value = 5;
-                    baseGainValue = 0.5; // 噪音稍微調大，因為帶通會吃掉很多能量
+                    baseGainValue = 0.5; 
                     if(this.source) this.source.connect(this.filter);
                 } else if (this.type === 'boatman') {
-                    // 還原較低頻、金屬摩擦感的劃蝽
                     this.source = audioCtx.createOscillator();
                     this.source.type = 'sawtooth';
-                    this.source.frequency.value = 2500; // 降低頻率
+                    this.source.frequency.value = 2500; 
                     
                     this.filter.type = 'bandpass';
                     this.filter.frequency.value = 2500;
@@ -380,8 +370,8 @@
                     this.pulseLfo.frequency.value = 14; 
                     
                     this.pulseGain = audioCtx.createGain();
-                    // 為了避免 click，LFO 控制的 Gain 不要完全到 0，且留一點基底
-                    this.pulseGain.gain.value = 0; 
+                    // 避免 0 值造成的指數漸變錯誤
+                    this.pulseGain.gain.setValueAtTime(0.0001, startTime); 
                     this.pulseLfo.connect(this.pulseGain.gain);
                     this.pulseLfo.start(startTime);
 
@@ -396,14 +386,12 @@
                     if(this.source) this.source.connect(this.filter);
                 }
 
-                // 平滑淡入 (Anti-click)
-                this.gain.gain.setValueAtTime(0, startTime);
-                this.gain.gain.linearRampToValueAtTime(baseGainValue, startTime + 0.1);
+                // 絕對平滑的淡入
+                this.gain.gain.setValueAtTime(0.0001, startTime);
+                this.gain.gain.linearRampToValueAtTime(baseGainValue, startTime + 0.15);
 
-                // 路由
                 this.filter.connect(this.panner);
                 this.panner.connect(this.gain);
-                
                 this.gain.connect(masterDry);
                 this.gain.connect(convolver);
 
@@ -413,41 +401,66 @@
             updatePanner(time, isInit = false) {
                 if (!this.panner || !audioCtx) return;
                 
-                // 映射邏輯不變
-                const posX = (this.x / width) * 6 - 3; 
-                const posZ = (this.y / height) * 10 - 5; 
+                // 使用平滑過的座標進行 3D 映射
+                const posX = (this.smoothedX / width) * 6 - 3; 
+                const posZ = (this.smoothedY / height) * 10 - 5; 
                 const posY = 0; 
 
-                // 使用更長的 timeConstant 來平滑拖曳造成的雜音
-                const timeConstant = isInit ? 0.01 : 0.1; 
-
-                if (this.panner.positionX) {
-                    this.panner.positionX.setTargetAtTime(posX, time, timeConstant);
-                    this.panner.positionY.setTargetAtTime(posY, time, timeConstant);
-                    this.panner.positionZ.setTargetAtTime(posZ, time, timeConstant);
-                } else {
-                    this.panner.setPosition(posX, posY, posZ);
+                // 計算目標頻率
+                let targetFreq = 0;
+                if (this.source && this.type !== 'boatman') {
+                    const heightRatio = Math.max(0, Math.min(1, 1 - (this.smoothedY / height))); 
+                    targetFreq = this.type === 'noise' ? 400 + heightRatio * 3000 : 200 + heightRatio * 1000;
                 }
 
-                // 動態頻率變化也加入平滑
-                if (this.source && this.type !== 'boatman') {
-                    const heightRatio = Math.max(0, Math.min(1, 1 - (this.y / height))); 
-                    if (this.type === 'noise') {
-                        this.filter.frequency.setTargetAtTime(400 + heightRatio * 3000, time, timeConstant);
-                    } else if (this.source.frequency) {
-                        this.source.frequency.setTargetAtTime(200 + heightRatio * 1000, time, timeConstant);
+                if (isInit) {
+                    if (this.panner.positionX) {
+                        this.panner.positionX.setValueAtTime(posX, time);
+                        this.panner.positionY.setValueAtTime(posY, time);
+                        this.panner.positionZ.setValueAtTime(posZ, time);
+                    } else {
+                        this.panner.setPosition(posX, posY, posZ);
+                    }
+                    if (targetFreq) {
+                        if (this.type === 'noise') this.filter.frequency.setValueAtTime(targetFreq, time);
+                        else this.source.frequency.setValueAtTime(targetFreq, time);
+                    }
+                    this.lastAudioUpdateTime = time;
+                } else {
+                    // 節流與平滑連續寫入：每 40ms 排程一次到未來的 50ms 節點，形成完美平滑的自動化曲線 (不會 Clicks)
+                    if (time - this.lastAudioUpdateTime >= 0.04) {
+                        const nextTime = time + 0.05;
+                        
+                        if (this.panner.positionX) {
+                            this.panner.positionX.linearRampToValueAtTime(posX, nextTime);
+                            this.panner.positionY.linearRampToValueAtTime(posY, nextTime);
+                            this.panner.positionZ.linearRampToValueAtTime(posZ, nextTime);
+                        } else {
+                            this.panner.setPosition(posX, posY, posZ);
+                        }
+
+                        if (targetFreq) {
+                            if (this.type === 'noise') this.filter.frequency.linearRampToValueAtTime(targetFreq, nextTime);
+                            else this.source.frequency.linearRampToValueAtTime(targetFreq, nextTime);
+                        }
+                        this.lastAudioUpdateTime = time;
                     }
                 }
             }
 
-            stop(fadeTime = 0.3) {
+            stop(fadeTime = 0.2) {
                 if (!audioCtx || !this.gain) return;
                 const now = audioCtx.currentTime;
                 
-                // 平滑淡出
+                // 平滑淡出，預防放開時的爆音
                 this.gain.gain.cancelScheduledValues(now);
-                this.gain.gain.setValueAtTime(this.gain.gain.value, now);
-                this.gain.gain.linearRampToValueAtTime(0, now + fadeTime);
+                try {
+                    // 精準捕捉當下音量，防止突變
+                    this.gain.gain.setValueAtTime(this.gain.gain.value, now);
+                } catch(e) {
+                    this.gain.gain.setValueAtTime(0.3, now);
+                }
+                this.gain.gain.linearRampToValueAtTime(0.0001, now + fadeTime);
                 
                 const s = this.source;
                 const pLfo = this.pulseLfo;
@@ -456,7 +469,6 @@
                 const p = this.panner;
                 const f = this.filter;
 
-                // 延遲清理節點
                 setTimeout(() => {
                     if (s) { try { s.stop(); s.disconnect(); } catch(e){} }
                     if (pLfo) { try { pLfo.stop(); pLfo.disconnect(); } catch(e){} }
@@ -475,7 +487,6 @@
             }
 
             cleanupNodes() {
-               // 立即斷開所有參考，通常在重新 play() 之前呼叫
                if (this.source) { try{ this.source.stop(); this.source.disconnect(); }catch(e){} }
                if (this.pulseLfo) { try{ this.pulseLfo.stop(); this.pulseLfo.disconnect(); }catch(e){} }
                if (this.gain) this.gain.disconnect();
@@ -486,6 +497,10 @@
             update() {
                 this.pulse += 0.1;
                 if (this.isDragging) {
+                    // JS 端平滑座標 (Lerp)，緩解 HRTF 因為滑鼠快速拖曳造成的運算失真
+                    this.smoothedX += (this.x - this.smoothedX) * 0.15;
+                    this.smoothedY += (this.y - this.smoothedY) * 0.15;
+
                     if (audioCtx) {
                         this.updatePanner(audioCtx.currentTime);
                     }
@@ -590,6 +605,9 @@
                 const obj = activeObjects[i];
                 if (!obj.isDragging && getDistance(pt.x, pt.y, obj.x, obj.y) < 40) {
                     obj.isDragging = true;
+                    // 開始拖曳的瞬間，直接同步一次 smoothed 座標，避免聲音從遠處「飛過來」
+                    obj.smoothedX = pt.x;
+                    obj.smoothedY = pt.y;
                     obj.pointerId = e.pointerId;
                     activePointers.set(e.pointerId, obj);
                     obj.play();
