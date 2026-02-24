@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>數位再生水族箱 - 深海脈衝版</title>
+    <title>數位再生水族箱 - 強力都普勒版</title>
     <style>
         body, html {
             margin: 0;
@@ -22,7 +22,6 @@
             touch-action: none;
         }
 
-        /* 場景控制 */
         #scene-controls {
             position: absolute;
             bottom: 30px;
@@ -72,7 +71,7 @@
 <body>
 
     <div id="ui-overlay">
-        <div class="instruction">AQUATIC PULSE ENGINE</div>
+        <div class="instruction">AIRSEED DYNAMICS ENGINE</div>
     </div>
 
     <div id="scene-controls">
@@ -86,11 +85,11 @@
 
     <script>
         /**
-         * 數位再生水族箱 - 深海脈衝版
-         * 1. 音效優化：小生物聲音改為極低沉、深邃的 Sub-Pulse。
-         * 2. 都普勒物理：模擬 IRCAM SPAT，計算物體劃過聽者時的徑向頻移。
-         * 3. 動態側鏈 (Sidechain)：焦點物件自動壓制周圍音量。
-         * 4. 視覺深度：High-DPI 渲染，16秒長淡出。
+         * 數位再生水族箱 - 強力都普勒版 (Airseed 啟發)
+         * 1. 物理動力：強化都普勒頻移，加入基於速度的徑向頻率補償。
+         * 2. 空氣濾波：物件接近時開啟高頻，遠離時低通濾波加劇。
+         * 3. 近場爆發：穿過 Z=0 聽者平面時，音量呈現非線性激增感。
+         * 4. 側鏈機制：移動物件自動 Ducking 周圍聲音。
          */
         const canvas = document.getElementById('appCanvas');
         const ctx = canvas.getContext('2d');
@@ -119,18 +118,21 @@
             if (audioCtx) return;
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             masterCompressor = audioCtx.createDynamicsCompressor();
-            masterCompressor.threshold.value = -18; 
+            masterCompressor.threshold.value = -24; // 增加壓縮空間以利瞬間噴發
             masterCompressor.connect(audioCtx.destination);
+            
             convolver = audioCtx.createConvolver();
             masterDry = audioCtx.createGain();
             masterWet = audioCtx.createGain();
             masterDry.connect(masterCompressor);
             convolver.connect(masterWet);
             masterWet.connect(masterCompressor);
+            
             const bufferSize = audioCtx.sampleRate * 2; 
             noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
             const output = noiseBuffer.getChannelData(0);
             for (let i = 0; i < bufferSize; i++) output[i] = Math.random() * 2 - 1;
+            
             applySceneAudio(currentScene);
             if (audioCtx.state === 'suspended') audioCtx.resume();
         }
@@ -150,10 +152,9 @@
                 const data = buffer.getChannelData(channel);
                 let lastVal = 0;
                 for (let i = 0; i < frameCount; i++) {
-                    let t = i / sampleRate;
                     let noise = (Math.random() * 2 - 1);
                     lastVal += filterAlpha * (noise - lastVal);
-                    data[i] = lastVal * Math.exp(-decay * t) * 0.35;
+                    data[i] = lastVal * Math.exp(-decay * (i / sampleRate)) * 0.35;
                 }
             }
             return buffer;
@@ -176,7 +177,7 @@
             applySceneAudio(scene);
         };
 
-        // --- 視覺繪圖核心 ---
+        // --- 視覺渲染核心 ---
         function drawGeometry(ctx, type, x, y, baseSize, rgbStr, alpha = 1.0, pulse = 0, modFreq = 0, modDepth = 0) {
             const isBehind = y > listenerPlaneY;
             const distFromPlane = Math.abs(y - listenerPlaneY);
@@ -229,45 +230,31 @@
             ctx.restore();
         }
 
-        // --- 靈動小生物 ---
+        // --- 小生物 ---
         class FishCreature {
             constructor(x, y, rgb) {
                 this.x = x; this.y = y;
                 this.vx = (Math.random() - 0.5) * 4; this.vy = (Math.random() - 0.5) * 4;
                 this.rgb = rgb; this.size = Math.random() * 2 + 2;
                 this.life = 1.0; this.decay = 0.005 + Math.random() * 0.005;
-                // 異步且分散的聲音觸發
                 setTimeout(() => this.playDeepPulse(), Math.random() * 800);
             }
-
-            // 【深海優化：低沉深邃的脈衝聲】
             playDeepPulse() {
                 if (!audioCtx) return;
                 const now = audioCtx.currentTime;
                 const osc = audioCtx.createOscillator();
                 const g = audioCtx.createGain();
                 const filter = audioCtx.createBiquadFilter();
-
                 osc.type = 'sine';
-                // 基頻極低: 45Hz ~ 85Hz
                 const startFreq = 45 + Math.random() * 40;
                 osc.frequency.setValueAtTime(startFreq, now);
-                // 微微向上移動後快速衰減，模擬物理位移
                 osc.frequency.exponentialRampToValueAtTime(startFreq * 1.8, now + 0.08);
                 osc.frequency.exponentialRampToValueAtTime(startFreq * 0.5, now + 0.3);
-
-                filter.type = 'lowpass';
-                filter.frequency.setValueAtTime(200, now);
-                filter.Q.value = 10; // 帶一點諧振
-
-                g.gain.setValueAtTime(0, now);
-                g.gain.linearRampToValueAtTime(0.15, now + 0.02);
-                g.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
-
+                filter.type = 'lowpass'; filter.frequency.setValueAtTime(200, now); filter.Q.value = 10;
+                g.gain.setValueAtTime(0, now); g.gain.linearRampToValueAtTime(0.12, now + 0.02); g.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
                 osc.connect(filter); filter.connect(g); g.connect(audioCtx.destination);
                 osc.start(now); osc.stop(now + 0.5);
             }
-
             update(target) {
                 if (target) {
                     let dx = target.x - this.x; let dy = target.y - this.y;
@@ -278,7 +265,6 @@
                 this.x += this.vx; this.y += this.vy;
                 this.life -= this.decay;
             }
-
             draw(ctx) {
                 ctx.save(); ctx.translate(this.x, this.y); ctx.rotate(Math.atan2(this.vy, this.vx));
                 ctx.fillStyle = `rgba(${this.rgb}, ${this.life * 0.7})`;
@@ -291,13 +277,12 @@
             constructor(typeConfig, x, y) {
                 this.type = typeConfig.id; this.rgb = typeConfig.color; this.x = x; this.y = y;
                 this.smoothedX = x; this.smoothedY = y;
-                this.prevDist = 0; 
-                this.velocity = 0; 
-                this.dopplerFactor = 1.0; 
+                this.prevDist = 0; this.velocity = 0; this.dopplerFactor = 1.0; 
                 this.isDragging = false; this.isFading = false;
                 this.life = 1.0; this.pulse = 0;
                 this.source = null; this.modulator = null; this.modGain = null; 
-                this.filter = null; this.gain = null; this.sidechainGain = null; 
+                this.filter = null; this.airFilter = null; // Air absorption filter
+                this.gain = null; this.sidechainGain = null; 
                 this.panner = null;
                 this.currentModFreq = 0; this.currentModDepth = 0; 
             }
@@ -307,29 +292,39 @@
                 const now = audioCtx.currentTime;
                 if (this.source) {
                     this.isFading = false; this.life = 1.0;
-                    if (this.gain) { this.gain.gain.cancelScheduledValues(now); this.gain.gain.setTargetAtTime(0.2, now, 0.1); }
+                    if (this.gain) { this.gain.gain.cancelScheduledValues(now); this.gain.gain.setTargetAtTime(0.25, now, 0.1); }
                     return; 
                 }
                 this.isFading = false; this.life = 1.0;
                 this.gain = audioCtx.createGain(); 
                 this.sidechainGain = audioCtx.createGain(); 
                 this.panner = audioCtx.createPanner();
+                
+                // Air Absorption Filter (仿 Airseed 核心)
+                this.airFilter = audioCtx.createBiquadFilter();
+                this.airFilter.type = 'lowpass';
+                this.airFilter.Q.value = 1.0;
+
                 this.panner.panningModel = (this.type === 'sine') ? 'equalpower' : 'HRTF';
-                this.panner.distanceModel = 'linear'; this.panner.refDistance = 1.2;
-                this.gain.gain.value = 0.0001;
-                this.sidechainGain.gain.value = 1.0;
+                this.panner.distanceModel = 'inverse'; 
+                this.panner.refDistance = 1.0;
+                this.panner.rolloffFactor = 1.5; // 增加距離衰減係數
+                
+                this.gain.gain.value = 0.0001; this.sidechainGain.gain.value = 1.0;
 
                 if (this.type === 'sine' || this.type === 'triangle') {
                     this.source = audioCtx.createOscillator(); 
                     this.modulator = audioCtx.createOscillator(); 
                     this.modGain = audioCtx.createGain();
                     this.source.type = this.type; this.modulator.type = 'sine';
-                    this.modulator.connect(this.modGain); this.modGain.connect(this.source.frequency);
-                    this.source.connect(this.panner); this.modulator.start(now);
+                    this.modulator.connect(this.modGain);
+                    this.modGain.connect(this.source.frequency);
+                    this.source.connect(this.airFilter);
+                    this.modulator.start(now);
                 } else if (this.type === 'noise') {
                     this.source = audioCtx.createBufferSource(); this.source.buffer = noiseBuffer; this.source.loop = true;
                     this.filter = audioCtx.createBiquadFilter(); this.filter.type = 'bandpass'; 
-                    this.source.connect(this.filter); this.filter.connect(this.panner);
+                    this.source.connect(this.filter); this.filter.connect(this.airFilter);
                 } else if (this.type === 'boatman') {
                     this.source = audioCtx.createOscillator(); this.source.type = 'sawtooth'; 
                     this.source.frequency.value = 3800;
@@ -338,13 +333,15 @@
                         let t = now + 0.05 + i/15;
                         this.pulseGain.gain.setValueAtTime(0, t); this.pulseGain.gain.linearRampToValueAtTime(1, t+0.005); this.pulseGain.gain.exponentialRampToValueAtTime(0.001, t+0.04);
                     }
-                    this.source.connect(this.pulseGain); this.pulseGain.connect(this.panner);
+                    this.source.connect(this.pulseGain); this.pulseGain.connect(this.airFilter);
                 }
 
-                this.updatePanner(true);
-                this.gain.gain.setTargetAtTime(0.2, now + 0.05, 0.1);
+                this.airFilter.connect(this.panner);
                 this.panner.connect(this.sidechainGain);
                 this.sidechainGain.connect(this.gain);
+
+                this.updatePanner(true);
+                this.gain.gain.setTargetAtTime(0.25, now + 0.05, 0.1);
 
                 if (this.type === 'sine' || this.type === 'triangle') this.gain.connect(audioCtx.destination);
                 else { this.gain.connect(masterDry); this.gain.connect(convolver); }
@@ -359,24 +356,40 @@
                 const posZ = distZNorm * 4.5;
                 const tc = isInit ? 0.001 : 0.15;
 
+                // --- 物理動力：都普勒頻移優化 ---
                 const currentDist = Math.sqrt(posX*posX + posZ*posZ);
                 if (!isInit) {
-                    this.velocity = (currentDist - this.prevDist) * 45; 
-                    const speedOfSound = 120; 
+                    // 偵測徑向速度 (與聽者的距離變化率)
+                    this.velocity = (currentDist - this.prevDist) * 60; // 放大係數以增強感知
+                    const speedOfSound = 100; // 低音速設定產生更誇張的都普勒感
                     this.dopplerFactor = speedOfSound / (speedOfSound + this.velocity);
-                    this.dopplerFactor = Math.max(0.6, Math.min(1.8, this.dopplerFactor));
+                    this.dopplerFactor = Math.max(0.5, Math.min(2.0, this.dopplerFactor));
                 }
                 this.prevDist = currentDist;
 
                 this.panner.positionX.setTargetAtTime(posX, now, tc);
                 this.panner.positionZ.setTargetAtTime(posZ, now, tc);
-                this.panner.positionY.setTargetAtTime(-1.2, now, tc);
+                this.panner.positionY.setTargetAtTime(-1.0, now, tc);
+
+                // --- 空氣濾波 (Air Absorption) 連動 ---
+                const zAbs = Math.abs(distZNorm);
+                if (this.airFilter) {
+                    // 靠近時高頻全開 (20kHz), 遠離時低通 (2kHz)
+                    const airFreq = 20000 - (zAbs * 18000);
+                    this.airFilter.frequency.setTargetAtTime(Math.max(500, airFreq), now, 0.15);
+                }
+
+                // --- 近場爆發增益 ---
+                if (this.gain && this.isDragging) {
+                    // 越靠近 Z=0 面，音量越強 (1.5倍噴發感)
+                    const proximityBoost = 1.0 + (1.0 - Math.min(1.0, zAbs)) * 0.8;
+                    this.gain.gain.setTargetAtTime(0.25 * proximityBoost * this.life, now, 0.1);
+                }
 
                 if (this.type === 'boatman') return; 
 
                 if (this.type === 'noise' && this.filter) {
-                    const zAbs = Math.abs(distZNorm);
-                    const baseFreq = 4000 - (zAbs * 2800);
+                    const baseFreq = 4000 - (zAbs * 2500);
                     this.filter.frequency.setTargetAtTime(baseFreq * this.dopplerFactor, now, 0.1);
                     this.filter.Q.setTargetAtTime(Math.max(1.5, 25 - (zAbs * 23.5)), now, 0.2);
                     this.currentModFreq = this.filter.Q.value;
@@ -385,14 +398,13 @@
                     const modFreq = 0.5 + xRatio * (this.type === 'sine' ? 80 : 150);
                     this.modulator.frequency.setTargetAtTime(modFreq, now, 0.2);
                     this.currentModFreq = modFreq;
-                    const zAbs = Math.abs(distZNorm);
                     const depthLimit = this.type === 'sine' ? 120 : 250;
                     const modDepth = Math.max(0, (1 - zAbs) * depthLimit);
                     this.modGain.gain.setTargetAtTime(modDepth, now, 0.2);
                     this.currentModDepth = modDepth;
                     const h = Math.max(0, Math.min(1, 1 - (this.smoothedY / height)));
                     const baseFreq = 150 + h * 400;
-                    this.source.frequency.setTargetAtTime(baseFreq * this.dopplerFactor, now, 0.1);
+                    this.source.frequency.setTargetAtTime((baseFreq * this.dopplerFactor), now, 0.08);
                 }
             }
 
@@ -408,13 +420,10 @@
             update() {
                 this.pulse += 0.08;
                 if (this.isDragging) {
-                    this.smoothedX += (this.x - this.smoothedX) * 0.18; 
-                    this.smoothedY += (this.y - this.smoothedY) * 0.18;
+                    this.smoothedX += (this.x - this.smoothedX) * 0.22; 
+                    this.smoothedY += (this.y - this.smoothedY) * 0.22;
                     this.updatePanner();
-                    // 隨機化小生物生成，保持零散感
-                    if (Math.random() > 0.96) {
-                        fishParticles.push(new FishCreature(this.x, this.y, this.rgb));
-                    }
+                    if (Math.random() > 0.96) fishParticles.push(new FishCreature(this.x, this.y, this.rgb));
                 }
                 if (this.isFading) { 
                     this.life -= 1.0 / 960; 
@@ -432,7 +441,7 @@
             if (!audioCtx) return;
             const now = audioCtx.currentTime;
             let aggressor = null;
-            let maxV = 0.5; 
+            let maxV = 1.0; 
             activeObjects.forEach(obj => {
                 if (obj.isDragging && Math.abs(obj.velocity) > maxV) {
                     maxV = Math.abs(obj.velocity); aggressor = obj;
@@ -443,13 +452,13 @@
                 let duckingLevel = 1.0;
                 if (aggressor && obj !== aggressor) {
                     const d = Math.sqrt((obj.x - aggressor.x)**2 + (obj.y - aggressor.y)**2);
-                    if (d < 250) duckingLevel = 0.2 + (d / 250) * 0.8;
+                    if (d < 300) duckingLevel = 0.15 + (d / 300) * 0.85; // 更強烈的壓制
                 }
-                obj.sidechainGain.gain.setTargetAtTime(duckingLevel, now, 0.12);
+                obj.sidechainGain.gain.setTargetAtTime(duckingLevel, now, 0.1);
             });
         }
 
-        // --- 視覺輔助 ---
+        // --- 視覺與環境 ---
         function drawMonitor(ctx) {
             const mvWidth = 160; const mvHeight = 140; const mvX = 25; const mvY = 25;
             ctx.save();
@@ -465,7 +474,7 @@
                 ctx.fillStyle = `rgba(${obj.rgb}, ${obj.life})`;
                 const mSize = 2.5 * obj.life;
                 ctx.beginPath(); 
-                const stretch = obj.velocity * 0.1;
+                const stretch = obj.velocity * 0.15;
                 ctx.ellipse(viewX + relX, viewY + relZ * 0.5 - 10, mSize, mSize + Math.abs(stretch), 0, 0, Math.PI * 2);
                 ctx.fill();
             });
