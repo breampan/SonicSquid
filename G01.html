@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>數位再生水族箱 - 物理全環境版</title>
+    <title>數位再生水族箱 - 3D 空間主場版</title>
     <style>
         body, html {
             margin: 0;
@@ -22,7 +22,6 @@
             touch-action: none;
         }
 
-        /* 場景控制容器 */
         #scene-controls {
             position: absolute;
             bottom: 30px;
@@ -72,7 +71,7 @@
 <body>
 
     <div id="ui-overlay">
-        <div class="instruction">AQUATIC TOTAL SPATIAL ENGINE</div>
+        <div class="instruction">3D AQUATIC COMPOSER</div>
     </div>
 
     <div id="scene-controls">
@@ -86,20 +85,28 @@
 
     <script>
         /**
-         * 數位再生水族箱 - 物理全環境修復版
-         * 修正：addColorStop 非有限數值錯誤。
-         * 功能：所有聲音通過空間卷積，具備強力都普勒與側鏈 Ducking。
+         * 數位再生水族箱 - 3D 空間主場版 (聲學優化版)
+         * 1. 聲學：放寬衰減半徑 (refDistance=6, rolloff=0.4)，延長聽覺邊界。
+         * 2. 視覺：不同場景獨立風格、色彩與網格律動。
+         * 3. 生物：FishCreature 圍繞聲源盤旋 (Orbiting Logic)。
+         * 4. 物理：強力都普勒、侵略性側鏈、全 FM 合成架構。
          */
         const canvas = document.getElementById('appCanvas');
         const ctx = canvas.getContext('2d');
-        let width = window.innerWidth, height = window.innerHeight, dpr = window.devicePixelRatio || 1;
-        let listenerPlaneY = height * 0.55; 
+        let width, height, dpr, centerX, centerY;
 
         // --- 核心音訊系統 ---
         let audioCtx;
         let convolver, masterDry, masterWet, masterCompressor;
         let currentScene = 'bathroom';
         let noiseBuffer = null;
+
+        const SCENE_CONFIG = {
+            bathroom: { main: '#00ccff', bg: '#021020', gridAlpha: 0.05, flow: 1.0, particleCount: 30 },
+            station: { main: '#ffaa44', bg: '#150a02', gridAlpha: 0.08, flow: 0.35, particleCount: 40 },
+            cave: { main: '#bb66ff', bg: '#0a0215', gridAlpha: 0.04, flow: 0.2, particleCount: 25 },
+            forest: { main: '#44ffaa', bg: '#02150a', gridAlpha: 0.06, flow: 0.65, particleCount: 35 }
+        };
 
         const WAVE_TYPES = {
             SINE: { id: 'sine', color: '100, 220, 255' },
@@ -141,10 +148,10 @@
             if (!audioCtx) return null;
             const sampleRate = audioCtx.sampleRate;
             let length = 1.0, decay = 5.0, lpFreq = 15000;
-            if (sceneType === 'bathroom') { length = 0.6; decay = 8.0; lpFreq = 8000; } 
-            else if (sceneType === 'station') { length = 3.5; decay = 1.8; lpFreq = 6000; } 
-            else if (sceneType === 'cave') { length = 2.8; decay = 3.5; lpFreq = 1200; } 
-            else { length = 1.2; decay = 4.5; lpFreq = 3000; }
+            if (sceneType === 'bathroom') { length = 0.8; decay = 8.0; lpFreq = 8000; } 
+            else if (sceneType === 'station') { length = 4.0; decay = 1.6; lpFreq = 5000; } 
+            else if (sceneType === 'cave') { length = 3.2; decay = 2.2; lpFreq = 1000; } 
+            else { length = 1.5; decay = 3.8; lpFreq = 3500; }
             
             const frameCount = Math.floor(sampleRate * length);
             const buffer = audioCtx.createBuffer(2, frameCount, sampleRate);
@@ -156,7 +163,7 @@
                     let t = i / sampleRate;
                     let noise = (Math.random() * 2 - 1);
                     lastVal += filterAlpha * (noise - lastVal);
-                    data[i] = lastVal * Math.exp(-decay * t) * 0.4;
+                    data[i] = lastVal * Math.exp(-decay * t) * 0.45;
                 }
             }
             return buffer;
@@ -167,59 +174,104 @@
             const ir = generateIR(scene);
             if (ir) convolver.buffer = ir;
             const now = audioCtx.currentTime;
-            if (scene === 'bathroom') { masterDry.gain.setTargetAtTime(0.85, now, 0.1); masterWet.gain.setTargetAtTime(0.3, now, 0.1); }
-            else if (scene === 'station') { masterDry.gain.setTargetAtTime(0.65, now, 0.1); masterWet.gain.setTargetAtTime(0.6, now, 0.1); }
-            else if (scene === 'cave') { masterDry.gain.setTargetAtTime(0.55, now, 0.1); masterWet.gain.setTargetAtTime(0.75, now, 0.1); }
-            else { masterDry.gain.setTargetAtTime(0.8, now, 0.1); masterWet.gain.setTargetAtTime(0.4, now, 0.1); }
+            if (scene === 'bathroom') { masterDry.gain.setTargetAtTime(0.8, now, 0.1); masterWet.gain.setTargetAtTime(0.25, now, 0.1); }
+            else if (scene === 'station') { masterDry.gain.setTargetAtTime(0.6, now, 0.1); masterWet.gain.setTargetAtTime(0.55, now, 0.1); }
+            else if (scene === 'cave') { masterDry.gain.setTargetAtTime(0.5, now, 0.1); masterWet.gain.setTargetAtTime(0.75, now, 0.1); }
+            else { masterDry.gain.setTargetAtTime(0.75, now, 0.1); masterWet.gain.setTargetAtTime(0.4, now, 0.1); }
         }
 
         window.setScene = (scene) => {
             initAudio(); currentScene = scene;
             document.querySelectorAll('.scene-btn').forEach(btn => btn.classList.remove('active'));
-            event.target.classList.add('active');
+            if(event) event.target.classList.add('active');
             applySceneAudio(scene);
         };
 
+        // --- 視覺渲染 ---
+        function drawBackground() {
+            const cfg = SCENE_CONFIG[currentScene];
+            const t = Date.now() * 0.001 * cfg.flow;
+
+            const bgGrad = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, height * 1.1);
+            bgGrad.addColorStop(0, cfg.bg);
+            bgGrad.addColorStop(1, '#000000');
+            ctx.fillStyle = bgGrad;
+            ctx.fillRect(0, 0, width, height);
+
+            ctx.lineWidth = 1;
+            ctx.strokeStyle = cfg.main + Math.floor(cfg.gridAlpha * 255).toString(16).padStart(2, '0');
+            
+            // 輻射線 & 透視環
+            for (let i = 0; i < 24; i++) {
+                const angle = (i / 24) * Math.PI * 2 + Math.sin(t * 0.15) * 0.08;
+                ctx.beginPath();
+                ctx.moveTo(centerX, centerY);
+                ctx.lineTo(centerX + Math.cos(angle) * width * 1.5, centerY + Math.sin(angle) * height * 1.5);
+                ctx.stroke();
+            }
+            
+            for (let r = 1; r < 7; r++) {
+                const ringT = t * 0.5 + r;
+                const offset = Math.sin(ringT) * 12;
+                ctx.beginPath();
+                ctx.ellipse(centerX, centerY, Math.max(1, r * 115 + offset), Math.max(1, r * 75 + offset), 0, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+
+            // 聽者中心視覺
+            ctx.save();
+            ctx.shadowBlur = 25;
+            ctx.shadowColor = cfg.main + '55';
+            ctx.fillStyle = cfg.main + '15';
+            ctx.strokeStyle = cfg.main + '77';
+            ctx.beginPath(); ctx.ellipse(centerX, centerY + 10, 32, 13, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+            ctx.beginPath(); ctx.arc(centerX, centerY - 12, 13, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+            ctx.restore();
+        }
+
         function drawGeometry(ctx, type, x, y, baseSize, rgbStr, alpha = 1.0, pulse = 0, modFreq = 0, modDepth = 0) {
-            const isBehind = y > listenerPlaneY;
-            const distFromPlane = Math.abs(y - listenerPlaneY);
-            const depthFactor = Math.max(0.3, 1.4 - (distFromPlane / (height * 0.5 || 1)));
+            const isBehind = y > centerY;
+            const dist = Math.sqrt((x - centerX)**2 + (y - centerY)**2);
+            const maxRange = height * 0.75;
+            const depthFactor = Math.max(0.2, 1.35 - (dist / maxRange));
             let currentSize = baseSize * depthFactor;
             if (type === 'sine' || type === 'triangle') currentSize *= 1.25; 
 
             ctx.save();
             ctx.translate(x, y);
-            if (isBehind) { ctx.setLineDash([4, 4]); alpha *= 0.45; }
+            if (isBehind) { ctx.setLineDash([4, 4]); alpha *= 0.5; }
 
-            const glowSize = currentSize * (isBehind ? 2 : 4);
+            const glowSize = Math.max(1, currentSize * (isBehind ? 2 : 4.5));
             const glow = ctx.createRadialGradient(0, 0, 0, 0, 0, glowSize);
-            glow.addColorStop(0, `rgba(${rgbStr}, ${alpha * 0.4})`);
+            glow.addColorStop(0, `rgba(${rgbStr}, ${alpha * 0.45})`);
             glow.addColorStop(1, 'transparent');
             ctx.fillStyle = glow;
             ctx.beginPath(); ctx.arc(0, 0, glowSize, 0, Math.PI * 2); ctx.fill();
 
             ctx.fillStyle = `rgba(${rgbStr}, ${alpha})`;
-            ctx.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.8})`;
+            ctx.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.85})`;
             ctx.lineWidth = isBehind ? 1.5 : 2.5;
 
             if (type === 'sine') {
                 const ringPulse = Math.sin(pulse * 0.5) * 5;
-                ctx.beginPath(); ctx.arc(0, 0, currentSize * 0.65 + ringPulse, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-                ctx.rotate(pulse * (0.3 + (modFreq / 100))); 
-                ctx.beginPath(); ctx.arc(currentSize * 0.4, 0, currentSize * 0.35 + (modDepth/200)*10, 0, Math.PI * 2); ctx.stroke();
+                const innerR = Math.max(0.1, currentSize * 0.65 + ringPulse);
+                const outerR = Math.max(0.1, currentSize * 0.85 + (modDepth / 250) * 10);
+                ctx.beginPath(); ctx.arc(0, 0, innerR, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+                ctx.rotate(pulse * (0.3 + (modFreq / 120))); 
+                ctx.beginPath(); ctx.arc(outerR * 0.45, 0, Math.max(0.1, outerR * 0.35), 0, Math.PI * 2); ctx.stroke();
             } else if (type === 'triangle') {
                 const modScale = 1.0 + (modDepth / 250) * 0.15 * Math.sin(pulse * 2.5);
                 ctx.save(); ctx.rotate(pulse * 0.15);
                 const s1 = currentSize * 1.2;
                 ctx.beginPath(); ctx.moveTo(0, -s1); ctx.lineTo(s1, s1 * 0.8); ctx.lineTo(-s1, s1 * 0.8); ctx.closePath(); ctx.stroke(); ctx.restore();
                 ctx.save(); ctx.rotate(-pulse * (0.2 + modFreq/200));
-                const s2 = currentSize * 0.75 * modScale;
+                const s2 = s1 * 0.6 * Math.max(0.1, modScale);
                 ctx.beginPath(); ctx.moveTo(0, s2); ctx.lineTo(s2, -s2 * 0.8); ctx.lineTo(-s2, -s2 * 0.8); ctx.closePath(); if (!isBehind) ctx.fill(); ctx.stroke(); ctx.restore();
             } else if (type === 'noise') {
-                const jitter = modFreq > 15 ? 0.5 : 0.2; 
+                const jitter = modFreq > 12 ? 0.6 : 0.25; 
                 ctx.beginPath();
                 for (let i = 0; i < 12; i++) {
-                    let r = currentSize * (0.8 + Math.random() * jitter);
+                    let r = Math.max(0.1, currentSize * (0.8 + Math.random() * jitter));
                     let a = (i / 12) * Math.PI * 2;
                     ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
                 }
@@ -236,9 +288,10 @@
             constructor(x, y, rgb) {
                 this.x = x; this.y = y;
                 this.vx = (Math.random() - 0.5) * 4; this.vy = (Math.random() - 0.5) * 4;
-                this.rgb = rgb; this.size = Math.random() * 2 + 2;
-                this.life = 1.0; this.decay = 0.005 + Math.random() * 0.005;
-                setTimeout(() => this.playDeepPulse(), Math.random() * 800);
+                this.rgb = rgb; this.size = Math.random() * 1.8 + 1.5;
+                this.life = 1.0; this.decay = 0.0035 + Math.random() * 0.0035;
+                this.angle = Math.random() * Math.PI * 2;
+                setTimeout(() => this.playDeepPulse(), Math.random() * 600);
             }
             playDeepPulse() {
                 if (!audioCtx) return;
@@ -247,29 +300,35 @@
                 const g = audioCtx.createGain();
                 const filter = audioCtx.createBiquadFilter();
                 osc.type = 'sine';
-                const startFreq = 45 + Math.random() * 40;
+                const startFreq = 40 + Math.random() * 45;
                 osc.frequency.setValueAtTime(startFreq, now);
-                osc.frequency.exponentialRampToValueAtTime(startFreq * 1.8, now + 0.08);
-                osc.frequency.exponentialRampToValueAtTime(startFreq * 0.5, now + 0.3);
-                filter.type = 'lowpass'; filter.frequency.setValueAtTime(200, now); filter.Q.value = 10;
-                g.gain.setValueAtTime(0, now); g.gain.linearRampToValueAtTime(0.12, now + 0.02); g.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+                osc.frequency.exponentialRampToValueAtTime(startFreq * 2.2, now + 0.08);
+                filter.type = 'lowpass'; filter.frequency.setValueAtTime(180, now);
+                g.gain.setValueAtTime(0, now); g.gain.linearRampToValueAtTime(0.12, now + 0.02); g.gain.exponentialRampToValueAtTime(0.001, now + 0.55);
                 osc.connect(filter); filter.connect(g); g.connect(audioCtx.destination);
-                osc.start(now); osc.stop(now + 0.5);
+                osc.start(now); osc.stop(now + 0.6);
             }
             update(target) {
                 if (target) {
                     let dx = target.x - this.x; let dy = target.y - this.y;
-                    let dist = Math.sqrt(dx*dx + dy*dy);
-                    if (dist > 15) { this.vx += (dx / dist) * 0.25; this.vy += (dy / dist) * 0.25; }
+                    let d = Math.sqrt(dx*dx + dy*dy);
+                    if (d > 5) {
+                        // 環繞吸引力 (渦流效應)
+                        const attract = 0.16;
+                        const orbit = 0.28;
+                        this.vx += (dx / d) * attract + (-dy / d) * orbit;
+                        this.vy += (dy / d) * attract + (dx / d) * orbit;
+                    }
                 }
-                this.vx *= 0.94; this.vy *= 0.94;
+                this.vx *= 0.965; this.vy *= 0.965;
                 this.x += this.vx; this.y += this.vy;
                 this.life -= this.decay;
+                this.angle = Math.atan2(this.vy, this.vx);
             }
             draw(ctx) {
-                ctx.save(); ctx.translate(this.x, this.y); ctx.rotate(Math.atan2(this.vy, this.vx));
-                ctx.fillStyle = `rgba(${this.rgb}, ${this.life * 0.7})`;
-                ctx.beginPath(); ctx.moveTo(this.size * 2, 0); ctx.quadraticCurveTo(0, this.size, -this.size, 0); ctx.quadraticCurveTo(0, -this.size, this.size * 2, 0); ctx.fill();
+                ctx.save(); ctx.translate(this.x, this.y); ctx.rotate(this.angle);
+                ctx.fillStyle = `rgba(${this.rgb}, ${Math.max(0, this.life) * 0.65})`;
+                ctx.beginPath(); ctx.moveTo(this.size * 2.2, 0); ctx.quadraticCurveTo(0, this.size, -this.size, 0); ctx.quadraticCurveTo(0, -this.size, this.size * 2.2, 0); ctx.fill();
                 ctx.restore();
             }
         }
@@ -293,7 +352,7 @@
                 const now = audioCtx.currentTime;
                 if (this.source) {
                     this.isFading = false; this.life = 1.0;
-                    if (this.gain) { this.gain.gain.cancelScheduledValues(now); this.gain.gain.setTargetAtTime(0.25, now, 0.1); }
+                    if (this.gain) { this.gain.gain.cancelScheduledValues(now); this.gain.gain.setTargetAtTime(0.35, now, 0.1); }
                     return; 
                 }
                 this.isFading = false; this.life = 1.0;
@@ -303,10 +362,12 @@
                 this.airFilter = audioCtx.createBiquadFilter();
                 this.airFilter.type = 'lowpass';
 
+                // 【優化關鍵】：調整衰減係數，讓有效聽覺範圍顯著擴大
                 this.panner.panningModel = (this.type === 'sine') ? 'equalpower' : 'HRTF';
-                this.panner.distanceModel = 'inverse'; 
-                this.panner.refDistance = 1.0;
-                this.panner.rolloffFactor = 1.8;
+                this.panner.distanceModel = 'linear'; // 線性衰減較符合此介面的視覺預期
+                this.panner.refDistance = 6.0;        // 6公尺內不衰減 (幾乎佔據半個螢幕)
+                this.panner.maxDistance = 30.0;      // 30公尺後靜音
+                this.panner.rolloffFactor = 0.5;     // 慢速衰減
                 
                 this.gain.gain.value = 0.0001; this.sidechainGain.gain.value = 1.0;
 
@@ -338,7 +399,7 @@
                 this.panner.connect(this.sidechainGain);
                 this.sidechainGain.connect(this.gain);
                 this.updatePanner(true);
-                this.gain.gain.setTargetAtTime(0.25, now + 0.05, 0.1);
+                this.gain.gain.setTargetAtTime(0.35, now + 0.05, 0.1);
                 this.gain.connect(masterDry);
                 this.gain.connect(convolver);
                 this.source.start(now + 0.05);
@@ -347,17 +408,17 @@
             updatePanner(isInit = false) {
                 if (!this.panner || !audioCtx) return;
                 const now = audioCtx.currentTime;
-                const posX = (this.smoothedX / width) * 6 - 3;
-                const distZNorm = (this.smoothedY - listenerPlaneY) / (height * 0.4 || 1);
-                const posZ = distZNorm * 4.5;
+                // 中心座標映射系統 - 略微調低座標縮放，匹配大範圍聽覺
+                const posX = ((this.smoothedX - centerX) / (width * 0.4 || 1)) * 12;
+                const posZ = ((this.smoothedY - centerY) / (height * 0.4 || 1)) * 12;
                 const tc = isInit ? 0.001 : 0.15;
 
                 const currentDist = Math.sqrt(posX*posX + posZ*posZ);
                 if (!isInit) {
-                    this.velocity = (currentDist - this.prevDist) * 70; 
-                    const speedOfSound = 90; 
+                    this.velocity = (currentDist - this.prevDist) * 75; 
+                    const speedOfSound = 120; 
                     this.dopplerFactor = speedOfSound / (speedOfSound + this.velocity);
-                    this.dopplerFactor = Math.max(0.4, Math.min(2.2, this.dopplerFactor));
+                    this.dopplerFactor = Math.max(0.4, Math.min(2.5, this.dopplerFactor));
                 }
                 this.prevDist = currentDist;
 
@@ -365,23 +426,19 @@
                 this.panner.positionZ.setTargetAtTime(posZ, now, tc);
                 this.panner.positionY.setTargetAtTime(-1.0, now, tc);
 
-                const zAbs = Math.abs(distZNorm);
+                // 【空氣濾波優化】：讓高頻衰減更自然，不至於拉遠就完全消失
+                const zNorm = currentDist / 12;
                 if (this.airFilter) {
-                    const airFreq = 20000 - (zAbs * 18500);
-                    this.airFilter.frequency.setTargetAtTime(Math.max(400, airFreq), now, 0.12);
-                }
-
-                if (this.gain && this.isDragging) {
-                    const proximityBoost = 1.0 + (1.0 - Math.min(1.0, zAbs)) * 1.0; 
-                    this.gain.gain.setTargetAtTime(0.25 * proximityBoost * this.life, now, 0.1);
+                    const airFreq = 20000 - (zNorm * 17500);
+                    this.airFilter.frequency.setTargetAtTime(Math.max(1000, airFreq), now, 0.15);
                 }
 
                 if (this.type === 'boatman') return; 
 
                 if (this.type === 'noise' && this.filter) {
-                    const baseFreq = 4000 - (zAbs * 2500);
+                    const baseFreq = 4000 - (Math.min(1.0, zNorm) * 2200);
                     this.filter.frequency.setTargetAtTime(baseFreq * this.dopplerFactor, now, 0.1);
-                    this.filter.Q.setTargetAtTime(Math.max(1.5, 25 - (zAbs * 23.5)), now, 0.2);
+                    this.filter.Q.setTargetAtTime(Math.max(1.8, 25 - (zNorm * 22)), now, 0.2);
                     this.currentModFreq = this.filter.Q.value;
                 } else if ((this.type === 'sine' || this.type === 'triangle') && this.modulator) {
                     const xRatio = (this.smoothedX / width);
@@ -389,11 +446,10 @@
                     this.modulator.frequency.setTargetAtTime(modFreq, now, 0.2);
                     this.currentModFreq = modFreq;
                     const depthLimit = this.type === 'sine' ? 120 : 250;
-                    const modDepth = Math.max(0, (1 - zAbs) * depthLimit);
+                    const modDepth = Math.max(0, (1 - Math.min(1.0, zNorm)) * depthLimit);
                     this.modGain.gain.setTargetAtTime(modDepth, now, 0.2);
                     this.currentModDepth = modDepth;
-                    const h = Math.max(0, Math.min(1, 1 - (this.smoothedY / (height || 1))));
-                    const baseFreq = 150 + h * 400;
+                    const baseFreq = 160 + (1.0 - Math.min(1.0, zNorm/1.5)) * 600;
                     this.source.frequency.setTargetAtTime((baseFreq * this.dopplerFactor), now, 0.08);
                 }
             }
@@ -410,10 +466,10 @@
             update() {
                 this.pulse += 0.08;
                 if (this.isDragging) {
-                    this.smoothedX += (this.x - this.smoothedX) * 0.22; 
-                    this.smoothedY += (this.y - this.smoothedY) * 0.22;
+                    this.smoothedX += (this.x - this.smoothedX) * 0.2; 
+                    this.smoothedY += (this.y - this.smoothedY) * 0.2;
                     this.updatePanner();
-                    if (Math.random() > 0.96) fishParticles.push(new FishCreature(this.x, this.y, this.rgb));
+                    if (Math.random() > 0.95) fishParticles.push(new FishCreature(this.x, this.y, this.rgb));
                 }
                 if (this.isFading) { 
                     this.life -= 1.0 / 960; 
@@ -424,7 +480,7 @@
                     } 
                 }
             }
-            draw(ctx) { if (this.life <= 0) return; drawGeometry(ctx, this.type, this.x, this.y, 28, this.rgb, this.life * (this.isDragging ? 1.0 : 0.4), this.pulse, this.currentModFreq, this.currentModDepth); }
+            draw(ctx) { if (this.life <= 0) return; drawGeometry(ctx, this.type, this.x, this.y, 28, this.rgb, Math.max(0, this.life) * (this.isDragging ? 1.0 : 0.4), this.pulse, this.currentModFreq, this.currentModDepth); }
         }
 
         function applySidechainDucking() {
@@ -442,67 +498,10 @@
                 let duckingLevel = 1.0;
                 if (aggressor && obj !== aggressor) {
                     const d = Math.sqrt((obj.x - aggressor.x)**2 + (obj.y - aggressor.y)**2);
-                    if (d < 350) duckingLevel = 0.1 + (d / 350) * 0.9;
+                    if (d < 350) duckingLevel = 0.15 + (d / 350) * 0.85;
                 }
-                obj.sidechainGain.gain.setTargetAtTime(duckingLevel, now, 0.08);
+                obj.sidechainGain.gain.setTargetAtTime(duckingLevel, now, 0.1);
             });
-        }
-
-        function drawMonitor(ctx) {
-            const mvWidth = 160; const mvHeight = 140; const mvX = 25; const mvY = 25;
-            ctx.save();
-            ctx.fillStyle = 'rgba(2, 10, 20, 0.85)'; ctx.strokeStyle = 'rgba(100, 220, 255, 0.15)';
-            ctx.beginPath(); ctx.moveTo(mvX + 15, mvY); ctx.lineTo(mvX + mvWidth, mvY); ctx.lineTo(mvX + mvWidth - 15, mvY + mvHeight); ctx.lineTo(mvX, mvY + mvHeight); ctx.closePath(); ctx.fill(); ctx.stroke();
-            const viewX = mvX + mvWidth / 2; const viewY = mvY + mvHeight * 0.65;
-            ctx.fillStyle = 'rgba(100, 220, 255, 0.2)';
-            ctx.beginPath(); ctx.ellipse(viewX, viewY, 12, 5, 0, 0, Math.PI * 2); ctx.fill();
-            ctx.beginPath(); ctx.arc(viewX, viewY - 8, 5, 0, Math.PI * 2); ctx.fill();
-            activeObjects.forEach(obj => {
-                const relX = ((obj.smoothedX / width) * 2 - 1) * 45;
-                const relZ = ((obj.smoothedY - listenerPlaneY) / height) * 140; 
-                ctx.fillStyle = `rgba(${obj.rgb}, ${obj.life})`;
-                const mSize = 2.5 * obj.life;
-                ctx.beginPath(); 
-                const stretch = obj.velocity * 0.18;
-                ctx.ellipse(viewX + relX, viewY + relZ * 0.5 - 10, mSize, mSize + Math.abs(stretch), 0, 0, Math.PI * 2);
-                ctx.fill();
-            });
-            ctx.restore();
-        }
-
-        function drawWater() {
-            // 背景漸層
-            const bgGrad = ctx.createLinearGradient(0, 0, 0, height);
-            bgGrad.addColorStop(0, '#021020');
-            
-            // 安全計算漸層停點，防止 NaN/Infinity
-            let stopPos = listenerPlaneY / (height || 1);
-            if (!isFinite(stopPos) || stopPos < 0) stopPos = 0.55;
-            if (stopPos > 1) stopPos = 1;
-            
-            bgGrad.addColorStop(stopPos, '#010810');
-            bgGrad.addColorStop(1, '#000000');
-            ctx.fillStyle = bgGrad;
-            ctx.fillRect(0, 0, width, height);
-
-            // 交界層
-            const layerGrad = ctx.createLinearGradient(0, listenerPlaneY - 80, 0, listenerPlaneY + 80);
-            layerGrad.addColorStop(0, 'transparent');
-            layerGrad.addColorStop(0.5, 'rgba(100, 220, 255, 0.08)');
-            layerGrad.addColorStop(1, 'transparent');
-            ctx.fillStyle = layerGrad;
-            ctx.fillRect(0, listenerPlaneY - 80, width, 160);
-
-            // 波紋
-            ctx.beginPath();
-            ctx.strokeStyle = 'rgba(100, 220, 255, 0.15)';
-            ctx.lineWidth = 1;
-            const t = Date.now() * 0.001;
-            for(let x=0; x<=width; x+=30) {
-                const y = listenerPlaneY + Math.sin(x*0.01 + t) * 4;
-                if(x===0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-            }
-            ctx.stroke();
         }
 
         function initLayout() {
@@ -511,7 +510,7 @@
             canvas.width = width * dpr; canvas.height = height * dpr;
             canvas.style.width = width + 'px'; canvas.style.height = height + 'px';
             ctx.scale(dpr, dpr);
-            listenerPlaneY = height * 0.55; 
+            centerX = width / 2; centerY = height / 2;
             paletteIcons = [
                 { typeConfig: WAVE_TYPES.SINE, x: width - 50, y: 70 },
                 { typeConfig: WAVE_TYPES.TRIANGLE, x: width - 50, y: 150 },
@@ -521,7 +520,7 @@
         }
 
         function animate() {
-            drawWater(); drawMonitor(ctx);
+            drawBackground();
             applySidechainDucking(); 
             ctx.fillStyle = 'rgba(255, 255, 255, 0.01)'; ctx.fillRect(width - 90, 0, 90, 380);
             paletteIcons.forEach(p => { drawGeometry(ctx, p.typeConfig.id, p.x, p.y, 20, p.typeConfig.color, 0.7, Date.now()*0.002, 0, 0); });
@@ -530,7 +529,9 @@
                 if (activeObjects[i].life <= 0 && activeObjects[i].isFading) activeObjects.splice(i, 1);
             }
             for (let i = fishParticles.length - 1; i >= 0; i--) {
-                const p = fishParticles[i]; p.update(activeObjects.find(o => !o.isFading)); p.draw(ctx);
+                const p = fishParticles[i]; 
+                const target = activeObjects.find(o => o.isDragging) || activeObjects[activeObjects.length-1];
+                p.update(target); p.draw(ctx);
                 if (p.life <= 0) fishParticles.splice(i, 1);
             }
             requestAnimationFrame(animate);
