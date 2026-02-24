@@ -77,11 +77,10 @@
 
     <script>
         /**
-         * 數位再生水族箱 - 聽能定向終極整合版 (反饋視覺校正版)
-         * 優化：
-         * 1. 將「複習連線」從原本的點擊點改為「聽者人頭（中心點）」至「聲源軌跡」，強化空間幾何感。
-         * 2. 保留座標插值 (Lerp) 與參數平滑 (tc=0.15s)，確保雜音徹底消除。
-         * 3. 整合聽能挑戰、16秒淡出、軌跡複習與全物理聲學模型。
+         * 數位再生水族箱 - 聽能定向終極整合版 (極致流暢平滑版)
+         * 1. 物理流暢化：整合參考版 Lerp 座標插值 (0.22) 與音訊平滑 (tc=0.15s)。
+         * 2. 音訊修補：採用 inverse 距離模型，解決藍色純音 FM 的數位雜訊。
+         * 3. 視覺校正：中心點連線至聲源，並標註點擊誤差。
          */
         const canvas = document.getElementById('appCanvas');
         const ctx = canvas.getContext('2d');
@@ -306,9 +305,41 @@
             ctx.restore();
         }
 
+        class FishCreature {
+            constructor(x, y, rgb) {
+                this.x = x; this.y = y; this.vx = (Math.random() - 0.5) * 4; this.vy = (Math.random() - 0.5) * 4;
+                this.rgb = rgb; this.size = Math.random() * 1.8 + 1.5; this.life = 1.0; this.decay = 0.0035;
+                setTimeout(() => this.playDeepPulse(), Math.random() * 600);
+            }
+            playDeepPulse() {
+                if (!audioCtx) return;
+                const now = audioCtx.currentTime; const osc = audioCtx.createOscillator();
+                const g = audioCtx.createGain(); const filter = audioCtx.createBiquadFilter();
+                osc.type = 'sine'; osc.frequency.setValueAtTime(45 + Math.random() * 40, now);
+                osc.frequency.exponentialRampToValueAtTime(150, now + 0.1);
+                filter.type = 'lowpass'; filter.frequency.setValueAtTime(180, now);
+                g.gain.setValueAtTime(0, now); g.gain.linearRampToValueAtTime(0.12, now + 0.02); g.gain.exponentialRampToValueAtTime(0.001, now + 0.55);
+                osc.connect(filter); filter.connect(g); g.connect(audioCtx.destination);
+                osc.start(now); osc.stop(now + 0.6);
+            }
+            update(target) {
+                if (target) {
+                    let dx = target.x - this.x; let dy = target.y - this.y; let d = Math.sqrt(dx*dx + dy*dy);
+                    if (d > 5) { this.vx += (dx / d) * 0.16 + (-dy / d) * 0.28; this.vy += (dy / d) * 0.16 + (dx / d) * 0.28; }
+                }
+                this.vx *= 0.965; this.vy *= 0.965; this.x += this.vx; this.y += this.vy; this.life -= this.decay;
+            }
+            draw(ctx) {
+                ctx.save(); ctx.translate(this.x, this.y); ctx.rotate(Math.atan2(this.vy, this.vx));
+                ctx.fillStyle = `rgba(${this.rgb}, ${Math.max(0, this.life) * 0.6})`;
+                ctx.beginPath(); ctx.moveTo(this.size * 2, 0); ctx.quadraticCurveTo(0, this.size, -this.size, 0); ctx.quadraticCurveTo(0, -this.size, this.size * 2, 0); ctx.fill(); ctx.restore();
+            }
+        }
+
         class DraggableSound {
             constructor(typeConfig, x, y) {
                 this.type = typeConfig.id; this.rgb = typeConfig.color; this.x = x; this.y = y;
+                // 【流暢機制】：整合參考版的 Smoothed 座標 Lerp
                 this.smoothedX = x; this.smoothedY = y;
                 this.prevDist = 0; this.velocity = 0; this.dopplerFactor = 1.0; 
                 this.isDragging = false; this.isFading = false; this.isChallengeObject = false; 
@@ -324,11 +355,15 @@
                 this.gain = audioCtx.createGain(); this.sidechainGain = audioCtx.createGain(); this.panner = audioCtx.createPanner();
                 this.airFilter = audioCtx.createBiquadFilter(); this.airFilter.type = 'lowpass';
                 this.pinnaFilter = audioCtx.createBiquadFilter(); this.pinnaFilter.type = 'highshelf';
-                this.panner.panningModel = 'HRTF';
-                this.panner.distanceModel = 'linear'; 
-                this.panner.refDistance = 100.0; 
-                this.panner.rolloffFactor = 0;   
+                
+                this.panner.panningModel = (this.type === 'sine') ? 'equalpower' : 'HRTF';
+                // 參考流暢版：回歸 inverse 模型配合 RefDistance
+                this.panner.distanceModel = 'inverse'; 
+                this.panner.refDistance = 1.0; 
+                this.panner.rolloffFactor = 1.8;   
+                
                 this.gain.gain.value = 0.0001;
+
                 if (this.type === 'sine' || this.type === 'triangle') {
                     this.source = audioCtx.createOscillator(); this.modulator = audioCtx.createOscillator(); this.modGain = audioCtx.createGain();
                     this.source.type = this.type; this.modulator.type = 'sine'; this.modulator.connect(this.modGain); this.modGain.connect(this.source.frequency);
@@ -347,54 +382,77 @@
                 }
                 this.pinnaFilter.connect(this.airFilter); this.airFilter.connect(this.panner); this.panner.connect(this.sidechainGain); this.sidechainGain.connect(this.gain);
                 this.updatePanner(true);
-                this.gain.gain.setTargetAtTime(0.4, now + 0.05, 0.15); this.gain.connect(masterDry); this.gain.connect(convolver);
+                this.gain.gain.setTargetAtTime(0.25, now + 0.05, 0.15); this.gain.connect(masterDry); this.gain.connect(convolver);
                 this.source.start(now + 0.05);
             }
 
             updatePanner(isInit = false) {
                 if (!this.panner || !audioCtx) return;
                 const now = audioCtx.currentTime;
-                const posX = ((this.smoothedX - centerX) / (width * 0.4 || 1)) * 12;
-                const posZ = ((this.smoothedY - listenerPlaneY) / (height * 0.4 || 1)) * 12;
+                // 參考流暢版：座標系統縮放 -3 ~ 3
+                const posX = (this.smoothedX / width) * 6 - 3;
+                const distZNorm = (this.smoothedY - listenerPlaneY) / (height * 0.4 || 1);
+                const posZ = distZNorm * 4.5;
+                const tc = isInit ? 0.001 : 0.15; // 指數平滑常數
+
                 const rawDist = Math.sqrt(posX*posX + posZ*posZ);
-                const safeDist = Math.max(1.8, rawDist); 
-                const distNorm = Math.min(1.0, rawDist / 12);
                 if (!isInit) {
-                    this.velocity = (rawDist - this.prevDist) * 80; 
-                    const speedOfSound = 120; this.dopplerFactor = Math.max(0.4, Math.min(2.5, speedOfSound / (speedOfSound + this.velocity)));
+                    this.velocity = (rawDist - this.prevDist) * 70; 
+                    const speedOfSound = 90; this.dopplerFactor = Math.max(0.4, Math.min(2.2, speedOfSound / (speedOfSound + this.velocity)));
                 }
                 this.prevDist = rawDist;
-                const tc = 0.15;
+
                 this.panner.positionX.setTargetAtTime(posX, now, tc);
                 this.panner.positionZ.setTargetAtTime(posZ, now, tc);
-                this.airFilter.frequency.setTargetAtTime(Math.max(800, 20000 - (distNorm * 18500)), now, tc);
+                
+                const zAbs = Math.abs(distZNorm);
+                this.airFilter.frequency.setTargetAtTime(Math.max(400, 20000 - (zAbs * 18500)), now, 0.12);
                 this.pinnaFilter.gain.setTargetAtTime(posZ < 0 ? 3.5 : -9.0, now, tc);
-                let volBase = 0.5 * this.life;
-                if (this.isDragging) volBase *= 1.1;
+
+                let vol = 0.25 * this.life;
+                if (this.isDragging) {
+                    const proximityBoost = 1.0 + (1.0 - Math.min(1.0, zAbs)) * 1.0;
+                    vol *= proximityBoost;
+                }
+
                 if (this.type === 'noise' && this.filter) {
-                    const q = Math.max(1.5, 30 - (distNorm * 28.5));
-                    this.filter.Q.setTargetAtTime(q, now, tc);
-                    this.filter.frequency.setTargetAtTime((4200 - (distNorm * 3400)) * this.dopplerFactor, now, tc);
-                    this.gain.gain.setTargetAtTime(volBase * (1.0 + (q / 30) * 4.5) * (1.0 - (Math.min(1.0, safeDist/12) * 0.85)), now, tc);
+                    this.filter.Q.setTargetAtTime(Math.max(1.5, 25 - (zAbs * 23.5)), now, 0.2);
+                    this.filter.frequency.setTargetAtTime((4000 - (zAbs * 2500)) * this.dopplerFactor, now, 0.1);
+                    this.gain.gain.setTargetAtTime(vol, now, tc);
                 } else if ((this.type === 'sine' || this.type === 'triangle') && this.modulator) {
                     const xRatio = (this.smoothedX / width);
-                    this.modulator.frequency.setTargetAtTime(0.5 + xRatio * (this.type === 'sine' ? 80 : 150), now, tc);
-                    this.modGain.gain.setTargetAtTime(Math.max(0, (1 - distNorm) * (this.type === 'sine' ? 120 : 250) * this.life), now, tc);
-                    this.source.frequency.setTargetAtTime((220 + (1.0 - distNorm) * 600) * this.dopplerFactor, now, tc);
-                    this.gain.gain.setTargetAtTime(volBase * 1.2 * (1.0 - distNorm * 0.8), now, tc);
-                } else { this.gain.gain.setTargetAtTime(volBase * (1.0 - distNorm * 0.8), now, tc); }
+                    this.modulator.frequency.setTargetAtTime(0.5 + xRatio * (this.type === 'sine' ? 80 : 150), now, 0.2);
+                    this.modGain.gain.setTargetAtTime(Math.max(0, (1 - zAbs) * (this.type === 'sine' ? 120 : 250) * this.life), now, 0.2);
+                    const h = Math.max(0, Math.min(1, 1 - (this.smoothedY / height)));
+                    this.source.frequency.setTargetAtTime((150 + h * 400) * this.dopplerFactor, now, 0.08);
+                    this.gain.gain.setTargetAtTime(vol * 1.1, now, tc);
+                } else { 
+                    this.gain.gain.setTargetAtTime(vol, now, tc); 
+                }
             }
 
             muteChallenge() { if (this.gain) { this.gain.gain.cancelScheduledValues(audioCtx.currentTime); this.gain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.15); } }
             cleanup() { if(this.source) { try { this.source.stop(audioCtx.currentTime + 0.15); if(this.modulator) this.modulator.stop(audioCtx.currentTime + 0.15); if(this.lfo) this.lfo.stop(audioCtx.currentTime + 0.15); } catch(e) {} } this.source = null; }
             update() {
                 this.pulse += 0.08;
-                if (this.isDragging) { this.life = 1.0; this.smoothedX += (this.x - this.smoothedX) * 0.22; this.smoothedY += (this.y - this.smoothedY) * 0.22; this.updatePanner(); }
-                else if (this.isChallengeObject && challengeState === 'listening') { this.updateCustomPath(); this.smoothedX = this.x; this.smoothedY = this.y; }
+                if (this.isDragging) { 
+                    this.life = 1.0; 
+                    // 【流暢核心】：導入物理座標插值 (0.22 權重)
+                    this.smoothedX += (this.x - this.smoothedX) * 0.22;
+                    this.smoothedY += (this.y - this.smoothedY) * 0.22;
+                    this.updatePanner(); 
+                    if (Math.random() > 0.95) fishParticles.push(new FishCreature(this.x, this.y, this.rgb));
+                }
+                else if (this.isChallengeObject && challengeState === 'listening') {
+                    this.updateCustomPath();
+                    this.smoothedX = this.x; this.smoothedY = this.y;
+                }
                 else if (this.isChallengeObject && challengeState === 'replaying') {
                     if (replayIndex < this.trajectory.length) {
                         const p = this.trajectory[replayIndex];
-                        this.x = p.x; this.y = p.y; this.smoothedX = this.x; this.smoothedY = this.y;
+                        this.x = p.x; this.y = p.y;
+                        this.smoothedX += (this.x - this.smoothedX) * 0.22;
+                        this.smoothedY += (this.y - this.smoothedY) * 0.22;
                         this.updatePanner(); replayIndex += 2; 
                     } else { challengeState = 'feedback'; this.muteChallenge(); document.getElementById('feedback-controls').style.display = "flex"; document.getElementById('challenge-hint').innerHTML = "複習結束"; }
                 }
@@ -438,15 +496,15 @@
                     challengeTarget.trajectory.forEach((p, i) => { if(i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y); });
                     ctx.stroke(); ctx.setLineDash([]);
                     
-                    // 2. 【核心修正】：將連線改為從「聽者人頭 (centerX, centerY)」連向「聲源 (challengeTarget)」
+                    // 2. 【核心修正】：將發光連線改為從「人頭中心 (centerX, centerY)」連向「聲源 (challengeTarget)」
                     ctx.beginPath(); 
                     const beamGrad = ctx.createLinearGradient(centerX, centerY, challengeTarget.x, challengeTarget.y);
                     beamGrad.addColorStop(0, 'rgba(100, 220, 255, 0.1)');
-                    beamGrad.addColorStop(1, `rgba(${challengeTarget.rgb}, 0.6)`);
+                    beamGrad.addColorStop(1, `rgba(${challengeTarget.rgb}, 0.8)`);
                     ctx.strokeStyle = beamGrad; ctx.lineWidth = 3;
                     ctx.moveTo(centerX, centerY); ctx.lineTo(challengeTarget.x, challengeTarget.y); ctx.stroke();
                     
-                    // 3. 標記使用者最後點擊的「誤差點」 (僅圓點標示，不連線)
+                    // 3. 標記使用者最後點擊的點 (紅色點標示誤差)
                     ctx.fillStyle = "#ff4444"; ctx.shadowBlur = 10; ctx.shadowColor = "#ff0000";
                     ctx.beginPath(); ctx.arc(lastGuessX, lastGuessY, 6, 0, Math.PI*2); ctx.fill(); ctx.shadowBlur = 0;
                 }
