@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>數位再生水族箱 - 強力都普勒版</title>
+    <title>數位再生水族箱 - 物理全環境版</title>
     <style>
         body, html {
             margin: 0;
@@ -22,6 +22,7 @@
             touch-action: none;
         }
 
+        /* 場景控制容器 */
         #scene-controls {
             position: absolute;
             bottom: 30px;
@@ -71,7 +72,7 @@
 <body>
 
     <div id="ui-overlay">
-        <div class="instruction">AIRSEED DYNAMICS ENGINE</div>
+        <div class="instruction">AQUATIC TOTAL SPATIAL ENGINE</div>
     </div>
 
     <div id="scene-controls">
@@ -85,18 +86,16 @@
 
     <script>
         /**
-         * 數位再生水族箱 - 強力都普勒版 (Airseed 啟發)
-         * 1. 物理動力：強化都普勒頻移，加入基於速度的徑向頻率補償。
-         * 2. 空氣濾波：物件接近時開啟高頻，遠離時低通濾波加劇。
-         * 3. 近場爆發：穿過 Z=0 聽者平面時，音量呈現非線性激增感。
-         * 4. 側鏈機制：移動物件自動 Ducking 周圍聲音。
+         * 數位再生水族箱 - 物理全環境修復版
+         * 修正：addColorStop 非有限數值錯誤。
+         * 功能：所有聲音通過空間卷積，具備強力都普勒與側鏈 Ducking。
          */
         const canvas = document.getElementById('appCanvas');
         const ctx = canvas.getContext('2d');
-        let width, height, dpr;
-        let listenerPlaneY; 
+        let width = window.innerWidth, height = window.innerHeight, dpr = window.devicePixelRatio || 1;
+        let listenerPlaneY = height * 0.55; 
 
-        // --- 音訊系統 ---
+        // --- 核心音訊系統 ---
         let audioCtx;
         let convolver, masterDry, masterWet, masterCompressor;
         let currentScene = 'bathroom';
@@ -118,12 +117,13 @@
             if (audioCtx) return;
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             masterCompressor = audioCtx.createDynamicsCompressor();
-            masterCompressor.threshold.value = -24; // 增加壓縮空間以利瞬間噴發
+            masterCompressor.threshold.value = -24; 
             masterCompressor.connect(audioCtx.destination);
             
             convolver = audioCtx.createConvolver();
             masterDry = audioCtx.createGain();
             masterWet = audioCtx.createGain();
+            
             masterDry.connect(masterCompressor);
             convolver.connect(masterWet);
             masterWet.connect(masterCompressor);
@@ -142,9 +142,10 @@
             const sampleRate = audioCtx.sampleRate;
             let length = 1.0, decay = 5.0, lpFreq = 15000;
             if (sceneType === 'bathroom') { length = 0.6; decay = 8.0; lpFreq = 8000; } 
-            else if (sceneType === 'station') { length = 3.5; decay = 1.5; lpFreq = 6000; } 
-            else if (sceneType === 'cave') { length = 2.5; decay = 3.0; lpFreq = 1200; } 
-            else { length = 1.2; decay = 4.0; lpFreq = 3000; }
+            else if (sceneType === 'station') { length = 3.5; decay = 1.8; lpFreq = 6000; } 
+            else if (sceneType === 'cave') { length = 2.8; decay = 3.5; lpFreq = 1200; } 
+            else { length = 1.2; decay = 4.5; lpFreq = 3000; }
+            
             const frameCount = Math.floor(sampleRate * length);
             const buffer = audioCtx.createBuffer(2, frameCount, sampleRate);
             const filterAlpha = Math.min(1.0, (2 * Math.PI * lpFreq) / sampleRate);
@@ -152,9 +153,10 @@
                 const data = buffer.getChannelData(channel);
                 let lastVal = 0;
                 for (let i = 0; i < frameCount; i++) {
+                    let t = i / sampleRate;
                     let noise = (Math.random() * 2 - 1);
                     lastVal += filterAlpha * (noise - lastVal);
-                    data[i] = lastVal * Math.exp(-decay * (i / sampleRate)) * 0.35;
+                    data[i] = lastVal * Math.exp(-decay * t) * 0.4;
                 }
             }
             return buffer;
@@ -162,12 +164,13 @@
 
         function applySceneAudio(scene) {
             if (!audioCtx) return;
-            convolver.buffer = generateIR(scene);
+            const ir = generateIR(scene);
+            if (ir) convolver.buffer = ir;
             const now = audioCtx.currentTime;
-            if (scene === 'bathroom') { masterDry.gain.setTargetAtTime(0.85, now, 0.1); masterWet.gain.setTargetAtTime(0.2, now, 0.1); }
-            else if (scene === 'station') { masterDry.gain.setTargetAtTime(0.7, now, 0.1); masterWet.gain.setTargetAtTime(0.5, now, 0.1); }
-            else if (scene === 'cave') { masterDry.gain.setTargetAtTime(0.6, now, 0.1); masterWet.gain.setTargetAtTime(0.65, now, 0.1); }
-            else { masterDry.gain.setTargetAtTime(0.8, now, 0.1); masterWet.gain.setTargetAtTime(0.3, now, 0.1); }
+            if (scene === 'bathroom') { masterDry.gain.setTargetAtTime(0.85, now, 0.1); masterWet.gain.setTargetAtTime(0.3, now, 0.1); }
+            else if (scene === 'station') { masterDry.gain.setTargetAtTime(0.65, now, 0.1); masterWet.gain.setTargetAtTime(0.6, now, 0.1); }
+            else if (scene === 'cave') { masterDry.gain.setTargetAtTime(0.55, now, 0.1); masterWet.gain.setTargetAtTime(0.75, now, 0.1); }
+            else { masterDry.gain.setTargetAtTime(0.8, now, 0.1); masterWet.gain.setTargetAtTime(0.4, now, 0.1); }
         }
 
         window.setScene = (scene) => {
@@ -177,11 +180,10 @@
             applySceneAudio(scene);
         };
 
-        // --- 視覺渲染核心 ---
         function drawGeometry(ctx, type, x, y, baseSize, rgbStr, alpha = 1.0, pulse = 0, modFreq = 0, modDepth = 0) {
             const isBehind = y > listenerPlaneY;
             const distFromPlane = Math.abs(y - listenerPlaneY);
-            const depthFactor = Math.max(0.3, 1.4 - (distFromPlane / (height * 0.5)));
+            const depthFactor = Math.max(0.3, 1.4 - (distFromPlane / (height * 0.5 || 1)));
             let currentSize = baseSize * depthFactor;
             if (type === 'sine' || type === 'triangle') currentSize *= 1.25; 
 
@@ -230,7 +232,6 @@
             ctx.restore();
         }
 
-        // --- 小生物 ---
         class FishCreature {
             constructor(x, y, rgb) {
                 this.x = x; this.y = y;
@@ -281,7 +282,7 @@
                 this.isDragging = false; this.isFading = false;
                 this.life = 1.0; this.pulse = 0;
                 this.source = null; this.modulator = null; this.modGain = null; 
-                this.filter = null; this.airFilter = null; // Air absorption filter
+                this.filter = null; this.airFilter = null; 
                 this.gain = null; this.sidechainGain = null; 
                 this.panner = null;
                 this.currentModFreq = 0; this.currentModDepth = 0; 
@@ -299,16 +300,13 @@
                 this.gain = audioCtx.createGain(); 
                 this.sidechainGain = audioCtx.createGain(); 
                 this.panner = audioCtx.createPanner();
-                
-                // Air Absorption Filter (仿 Airseed 核心)
                 this.airFilter = audioCtx.createBiquadFilter();
                 this.airFilter.type = 'lowpass';
-                this.airFilter.Q.value = 1.0;
 
                 this.panner.panningModel = (this.type === 'sine') ? 'equalpower' : 'HRTF';
                 this.panner.distanceModel = 'inverse'; 
                 this.panner.refDistance = 1.0;
-                this.panner.rolloffFactor = 1.5; // 增加距離衰減係數
+                this.panner.rolloffFactor = 1.8;
                 
                 this.gain.gain.value = 0.0001; this.sidechainGain.gain.value = 1.0;
 
@@ -339,12 +337,10 @@
                 this.airFilter.connect(this.panner);
                 this.panner.connect(this.sidechainGain);
                 this.sidechainGain.connect(this.gain);
-
                 this.updatePanner(true);
                 this.gain.gain.setTargetAtTime(0.25, now + 0.05, 0.1);
-
-                if (this.type === 'sine' || this.type === 'triangle') this.gain.connect(audioCtx.destination);
-                else { this.gain.connect(masterDry); this.gain.connect(convolver); }
+                this.gain.connect(masterDry);
+                this.gain.connect(convolver);
                 this.source.start(now + 0.05);
             }
 
@@ -352,18 +348,16 @@
                 if (!this.panner || !audioCtx) return;
                 const now = audioCtx.currentTime;
                 const posX = (this.smoothedX / width) * 6 - 3;
-                const distZNorm = (this.smoothedY - listenerPlaneY) / (height * 0.4);
+                const distZNorm = (this.smoothedY - listenerPlaneY) / (height * 0.4 || 1);
                 const posZ = distZNorm * 4.5;
                 const tc = isInit ? 0.001 : 0.15;
 
-                // --- 物理動力：都普勒頻移優化 ---
                 const currentDist = Math.sqrt(posX*posX + posZ*posZ);
                 if (!isInit) {
-                    // 偵測徑向速度 (與聽者的距離變化率)
-                    this.velocity = (currentDist - this.prevDist) * 60; // 放大係數以增強感知
-                    const speedOfSound = 100; // 低音速設定產生更誇張的都普勒感
+                    this.velocity = (currentDist - this.prevDist) * 70; 
+                    const speedOfSound = 90; 
                     this.dopplerFactor = speedOfSound / (speedOfSound + this.velocity);
-                    this.dopplerFactor = Math.max(0.5, Math.min(2.0, this.dopplerFactor));
+                    this.dopplerFactor = Math.max(0.4, Math.min(2.2, this.dopplerFactor));
                 }
                 this.prevDist = currentDist;
 
@@ -371,18 +365,14 @@
                 this.panner.positionZ.setTargetAtTime(posZ, now, tc);
                 this.panner.positionY.setTargetAtTime(-1.0, now, tc);
 
-                // --- 空氣濾波 (Air Absorption) 連動 ---
                 const zAbs = Math.abs(distZNorm);
                 if (this.airFilter) {
-                    // 靠近時高頻全開 (20kHz), 遠離時低通 (2kHz)
-                    const airFreq = 20000 - (zAbs * 18000);
-                    this.airFilter.frequency.setTargetAtTime(Math.max(500, airFreq), now, 0.15);
+                    const airFreq = 20000 - (zAbs * 18500);
+                    this.airFilter.frequency.setTargetAtTime(Math.max(400, airFreq), now, 0.12);
                 }
 
-                // --- 近場爆發增益 ---
                 if (this.gain && this.isDragging) {
-                    // 越靠近 Z=0 面，音量越強 (1.5倍噴發感)
-                    const proximityBoost = 1.0 + (1.0 - Math.min(1.0, zAbs)) * 0.8;
+                    const proximityBoost = 1.0 + (1.0 - Math.min(1.0, zAbs)) * 1.0; 
                     this.gain.gain.setTargetAtTime(0.25 * proximityBoost * this.life, now, 0.1);
                 }
 
@@ -402,7 +392,7 @@
                     const modDepth = Math.max(0, (1 - zAbs) * depthLimit);
                     this.modGain.gain.setTargetAtTime(modDepth, now, 0.2);
                     this.currentModDepth = modDepth;
-                    const h = Math.max(0, Math.min(1, 1 - (this.smoothedY / height)));
+                    const h = Math.max(0, Math.min(1, 1 - (this.smoothedY / (height || 1))));
                     const baseFreq = 150 + h * 400;
                     this.source.frequency.setTargetAtTime((baseFreq * this.dopplerFactor), now, 0.08);
                 }
@@ -441,7 +431,7 @@
             if (!audioCtx) return;
             const now = audioCtx.currentTime;
             let aggressor = null;
-            let maxV = 1.0; 
+            let maxV = 1.2; 
             activeObjects.forEach(obj => {
                 if (obj.isDragging && Math.abs(obj.velocity) > maxV) {
                     maxV = Math.abs(obj.velocity); aggressor = obj;
@@ -452,13 +442,12 @@
                 let duckingLevel = 1.0;
                 if (aggressor && obj !== aggressor) {
                     const d = Math.sqrt((obj.x - aggressor.x)**2 + (obj.y - aggressor.y)**2);
-                    if (d < 300) duckingLevel = 0.15 + (d / 300) * 0.85; // 更強烈的壓制
+                    if (d < 350) duckingLevel = 0.1 + (d / 350) * 0.9;
                 }
-                obj.sidechainGain.gain.setTargetAtTime(duckingLevel, now, 0.1);
+                obj.sidechainGain.gain.setTargetAtTime(duckingLevel, now, 0.08);
             });
         }
 
-        // --- 視覺與環境 ---
         function drawMonitor(ctx) {
             const mvWidth = 160; const mvHeight = 140; const mvX = 25; const mvY = 25;
             ctx.save();
@@ -474,7 +463,7 @@
                 ctx.fillStyle = `rgba(${obj.rgb}, ${obj.life})`;
                 const mSize = 2.5 * obj.life;
                 ctx.beginPath(); 
-                const stretch = obj.velocity * 0.15;
+                const stretch = obj.velocity * 0.18;
                 ctx.ellipse(viewX + relX, viewY + relZ * 0.5 - 10, mSize, mSize + Math.abs(stretch), 0, 0, Math.PI * 2);
                 ctx.fill();
             });
@@ -482,13 +471,32 @@
         }
 
         function drawWater() {
+            // 背景漸層
             const bgGrad = ctx.createLinearGradient(0, 0, 0, height);
-            bgGrad.addColorStop(0, '#021020'); bgGrad.addColorStop(listenerPlaneY / height, '#010810'); bgGrad.addColorStop(1, '#000000');
-            ctx.fillStyle = bgGrad; ctx.fillRect(0, 0, width, height);
+            bgGrad.addColorStop(0, '#021020');
+            
+            // 安全計算漸層停點，防止 NaN/Infinity
+            let stopPos = listenerPlaneY / (height || 1);
+            if (!isFinite(stopPos) || stopPos < 0) stopPos = 0.55;
+            if (stopPos > 1) stopPos = 1;
+            
+            bgGrad.addColorStop(stopPos, '#010810');
+            bgGrad.addColorStop(1, '#000000');
+            ctx.fillStyle = bgGrad;
+            ctx.fillRect(0, 0, width, height);
+
+            // 交界層
             const layerGrad = ctx.createLinearGradient(0, listenerPlaneY - 80, 0, listenerPlaneY + 80);
-            layerGrad.addColorStop(0, 'transparent'); layerGrad.addColorStop(0.5, 'rgba(100, 220, 255, 0.06)'); layerGrad.addColorStop(1, 'transparent');
-            ctx.fillStyle = layerGrad; ctx.fillRect(0, listenerPlaneY - 80, width, 160);
-            ctx.beginPath(); ctx.strokeStyle = 'rgba(100, 220, 255, 0.12)'; ctx.lineWidth = 1;
+            layerGrad.addColorStop(0, 'transparent');
+            layerGrad.addColorStop(0.5, 'rgba(100, 220, 255, 0.08)');
+            layerGrad.addColorStop(1, 'transparent');
+            ctx.fillStyle = layerGrad;
+            ctx.fillRect(0, listenerPlaneY - 80, width, 160);
+
+            // 波紋
+            ctx.beginPath();
+            ctx.strokeStyle = 'rgba(100, 220, 255, 0.15)';
+            ctx.lineWidth = 1;
             const t = Date.now() * 0.001;
             for(let x=0; x<=width; x+=30) {
                 const y = listenerPlaneY + Math.sin(x*0.01 + t) * 4;
