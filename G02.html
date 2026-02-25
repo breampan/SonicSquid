@@ -12,6 +12,7 @@
             user-select: none; -webkit-user-select: none;
         }
         canvas { display: block; touch-action: none; }
+
         #scene-controls {
             position: absolute; bottom: 25px; left: 50%;
             transform: translateX(-50%); display: flex; gap: 8px;
@@ -20,6 +21,7 @@
             border: 1px solid rgba(100, 220, 255, 0.1); z-index: 100;
             max-width: 90vw; overflow-x: auto;
         }
+
         .scene-btn {
             background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.1);
             color: rgba(200, 240, 255, 0.6); padding: 7px 14px; border-radius: 20px;
@@ -27,6 +29,7 @@
             white-space: nowrap;
         }
         .scene-btn.active { background: rgba(100, 220, 255, 0.2); border-color: #64dcff; color: #fff; }
+
         #challenge-ui {
             position: absolute; top: 25px; left: 20px;
             display: flex; flex-direction: column; gap: 10px; z-index: 200;
@@ -39,7 +42,9 @@
         }
         .action-btn:hover { background: #64dcff; color: #01050a; }
         .score-panel { color: #64dcff; font-size: 18px; font-weight: bold; display: none; text-shadow: 0 0 10px rgba(100,220,255,0.5); }
+        
         .challenge-actions { display: flex; gap: 10px; }
+
         #challenge-hint {
             position: absolute; top: 45%; left: 50%;
             transform: translate(-50%, -50%); color: #64dcff;
@@ -103,12 +108,11 @@
         let challengeTarget = null;
         let lastGuessX = 0, lastGuessY = 0;
         let replayIndex = 0;
+
         let activeObjects = []; 
         let paletteIcons = [];
         const activePointers = new Map();
-        
-        // 背景視覺粒子
-        let marineSnow = [];
+        let fishParticles = [];
 
         function initAudio() {
             if (!audioCtx) {
@@ -116,16 +120,20 @@
                 masterCompressor = audioCtx.createDynamicsCompressor();
                 masterCompressor.threshold.setTargetAtTime(-24, audioCtx.currentTime, 0.1);
                 masterCompressor.connect(audioCtx.destination);
+                
                 convolver = audioCtx.createConvolver();
                 masterDry = audioCtx.createGain(); masterWet = audioCtx.createGain();
                 masterDry.connect(masterCompressor); convolver.connect(masterWet); masterWet.connect(masterCompressor);
+                
                 const bufferSize = audioCtx.sampleRate * 2; 
                 noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
                 const output = noiseBuffer.getChannelData(0);
                 for (let i = 0; i < bufferSize; i++) output[i] = Math.random() * 2 - 1;
                 applySceneAudio(currentScene);
             }
-            if (audioCtx.state !== 'running') audioCtx.resume();
+            if (audioCtx.state !== 'running') {
+                audioCtx.resume();
+            }
         }
 
         function applySceneAudio(scene) {
@@ -150,46 +158,95 @@
             masterWet.gain.setTargetAtTime(cfg.wet, now, 0.15);
         }
 
-        function initBackgroundVisuals() {
-            marineSnow = [];
-            for(let i=0; i<60; i++) {
-                marineSnow.push({
-                    x: Math.random() * width, y: Math.random() * height,
-                    s: 0.5 + Math.random() * 1.5, vy: 0.2 + Math.random() * 0.5,
-                    a: 0.1 + Math.random() * 0.4
-                });
+        window.toggleMode = () => {
+            initAudio(); 
+            isChallengeMode = !isChallengeMode;
+            const btn = document.getElementById('mode-toggle');
+            const scoreDisplay = document.getElementById('score-display');
+            const fbUI = document.getElementById('feedback-controls');
+            const hint = document.getElementById('challenge-hint');
+            
+            activeObjects.forEach(obj => obj.cleanup());
+            activeObjects = [];
+            if (challengeTarget) { challengeTarget.cleanup(); challengeTarget = null; }
+            fbUI.style.display = "none";
+            totalScore = 0;
+            scoreDisplay.innerText = `積分: ${totalScore}`;
+
+            if (isChallengeMode) {
+                btn.innerText = "退出訓練模式";
+                scoreDisplay.style.display = "block";
+                challengeState = 'preparing';
+                hint.innerHTML = "準備好了嗎？<br><span style='font-size:16px; color:#fff'>點擊畫面任何地方開始聽能定向挑戰</span>";
+                hint.style.opacity = 1;
+            } else {
+                btn.innerText = "開啟聽能定向挑戰";
+                scoreDisplay.style.display = "none";
+                hint.style.opacity = 0;
+                challengeState = 'idle';
             }
+        };
+
+        function startNewChallenge() {
+            challengeState = 'listening';
+            document.getElementById('feedback-controls').style.display = "none";
+            const hint = document.getElementById('challenge-hint');
+            hint.innerHTML = "請閉上眼聆聽聲音移動...";
+            hint.style.opacity = 1;
+            const randomType = Object.values(WAVE_TYPES)[Math.floor(Math.random() * 4)];
+            const safeX = width * 0.25; const safeY = height * 0.25;
+            const rx = safeX + Math.random() * (width - safeX * 2);
+            const ry = safeY + Math.random() * (height - safeY * 2);
+            challengeTarget = new DraggableSound(randomType, rx, ry);
+            challengeTarget.isChallengeObject = true;
+            challengeTarget.trajectory = []; 
+            challengeTarget.moveDuration = 3500 + Math.random() * 2000;
+            challengeTarget.startTime = Date.now();
+            const angleStart = Math.random() * Math.PI * 2;
+            const angleSpeed = (Math.random() - 0.5) * 0.05;
+            const radius = 80 + Math.random() * 100 * uiScale;
+            challengeTarget.updateCustomPath = function() {
+                const elapsed = Date.now() - this.startTime;
+                if (elapsed < this.moveDuration) {
+                    this.x = rx + Math.cos(angleStart + angleSpeed * elapsed * 0.05) * radius;
+                    this.y = ry + Math.sin(angleStart + angleSpeed * elapsed * 0.05) * radius;
+                    this.trajectory.push({x: this.x, y: this.y});
+                    this.updatePanner();
+                } else {
+                    challengeState = 'waiting_for_guess';
+                    this.muteChallenge();
+                    hint.innerHTML = "聲音已停止<br><span style='font-size:16px; color:#fff'>請點擊聲源最後消失的位置</span>";
+                }
+            };
+            challengeTarget.play();
         }
 
-        function drawUnderwaterBackground() {
+        window.startReplay = () => {
+            if (!challengeTarget) return;
+            challengeState = 'replaying';
+            replayIndex = 0;
+            document.getElementById('feedback-controls').style.display = "none";
+            document.getElementById('challenge-hint').innerHTML = "正在進行軌跡複習...";
+            challengeTarget.life = 1.0;
+            challengeTarget.play(); 
+        };
+
+        window.prepareNextChallenge = () => {
+            challengeState = 'preparing';
+            if (challengeTarget) challengeTarget.cleanup();
+            challengeTarget = null;
+            document.getElementById('feedback-controls').style.display = "none";
+            const hint = document.getElementById('challenge-hint');
+            hint.innerHTML = "準備下一題...<br><span style='font-size:18px; color:#fff'>點擊畫面繼續</span>";
+            hint.style.opacity = 1;
+        };
+
+        function drawBackground() {
             const cfg = SCENE_CONFIG[currentScene];
-            const t = Date.now() * 0.001;
+            const t = Date.now() * 0.001 * cfg.flow;
             const bgGrad = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, height * 1.1);
             bgGrad.addColorStop(0, cfg.bg); bgGrad.addColorStop(1, '#000000');
             ctx.fillStyle = bgGrad; ctx.fillRect(0, 0, width, height);
-
-            // 水下光折射特效 (微調透明度以免干擾 UI)
-            ctx.save();
-            ctx.globalCompositeOperation = 'screen';
-            for (let i = 0; i < 2; i++) {
-                ctx.beginPath(); ctx.strokeStyle = cfg.main + '05';
-                ctx.lineWidth = 120 * uiScale;
-                const offset = t * (0.3 + i * 0.1);
-                ctx.moveTo(-100, height * 0.2 + Math.sin(offset) * 30);
-                ctx.bezierCurveTo(width * 0.3, height * 0.1, width * 0.7, height * 0.4, width + 100, height * 0.2);
-                ctx.stroke();
-            }
-            ctx.restore();
-
-            // 海雪粒子
-            ctx.fillStyle = "#fff";
-            marineSnow.forEach(p => {
-                p.y += p.vy; if (p.y > height) p.y = -10;
-                ctx.globalAlpha = p.a; ctx.beginPath(); ctx.arc(p.x, p.y, p.s, 0, Math.PI * 2); ctx.fill();
-            });
-            ctx.globalAlpha = 1.0;
-
-            // 原有的格線與環境圓環
             ctx.lineWidth = 1; ctx.strokeStyle = cfg.main + '22';
             for (let i = 0; i < 24; i++) {
                 const a = (i / 24) * Math.PI * 2 + Math.sin(t * 0.1) * 0.05;
@@ -199,13 +256,11 @@
                 const ringT = t * 0.5 + r; const offset = Math.sin(ringT) * 12;
                 ctx.beginPath(); ctx.ellipse(centerX, centerY, Math.max(1, r * 115 + offset), Math.max(1, r * 75 + offset), 0, 0, Math.PI * 2); ctx.stroke();
             }
-            // 聽者圖示
             ctx.save(); ctx.shadowBlur = 20; ctx.shadowColor = cfg.main + '55'; ctx.fillStyle = cfg.main + '15'; ctx.strokeStyle = cfg.main + '77';
             ctx.beginPath(); ctx.ellipse(centerX, centerY + 10, 32, 13, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
             ctx.beginPath(); ctx.arc(centerX, centerY - 12, 13, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); ctx.restore();
         }
 
-        // --- 回歸最原始精緻的幾何繪製函數 ---
         function drawGeometry(ctx, type, x, y, baseSize, rgbStr, alpha = 1.0, pulse = 0) {
             const isBehind = y > listenerPlaneY; const dist = Math.sqrt((x - centerX)**2 + (y - centerY)**2);
             const depthFactor = Math.max(0.2, 1.35 - (dist / (height * 0.75 || 1)));
@@ -216,7 +271,6 @@
             glow.addColorStop(0, `rgba(${rgbStr}, ${alpha * 0.45})`); glow.addColorStop(1, 'transparent');
             ctx.fillStyle = glow; ctx.beginPath(); ctx.arc(0, 0, glowSize, 0, Math.PI * 2); ctx.fill();
             ctx.fillStyle = `rgba(${rgbStr}, ${alpha})`; ctx.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.85})`; ctx.lineWidth = isBehind ? 1.5 : 2.5;
-            
             if (type === 'sine') {
                 const r = Math.max(0.1, currentSize * 0.65 + Math.sin(pulse * 0.5) * 5);
                 ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
@@ -246,20 +300,19 @@
                 this.prevDist = 0; this.velocity = 0; this.dopplerFactor = 1.0; 
                 this.isDragging = false; this.isFading = false; this.isChallengeObject = false; 
                 this.life = 1.0; this.pulse = 0; this.trajectory = [];
-                this.source = null; this.gain = null; this.panner = null;
-                // 用於調變的節點
-                this.modulator = null; this.modGain = null; this.lfo = null; this.filter = null;
-                this.pinnaFilter = null; this.airFilter = null; this.sidechainGain = null;
+                this.source = null; this.modulator = null; this.modGain = null; 
+                this.lfo = null; this.filter = null; this.pinnaFilter = null; this.airFilter = null; 
+                this.gain = null; this.sidechainGain = null; this.panner = null;
             }
-
             play() {
                 if (!audioCtx) return; const now = audioCtx.currentTime;
+                if (this.source) return; 
                 this.gain = audioCtx.createGain(); this.sidechainGain = audioCtx.createGain(); this.panner = audioCtx.createPanner();
                 this.airFilter = audioCtx.createBiquadFilter(); this.airFilter.type = 'lowpass';
                 this.pinnaFilter = audioCtx.createBiquadFilter(); this.pinnaFilter.type = 'highshelf';
-                this.panner.panningModel = 'HRTF';
+                this.panner.panningModel = (this.type === 'sine') ? 'equalpower' : 'HRTF';
                 this.panner.distanceModel = 'inverse'; this.panner.refDistance = 1.0; this.panner.rolloffFactor = 1.8;   
-                
+                this.gain.gain.value = 0.0001;
                 if (this.type === 'sine' || this.type === 'triangle') {
                     this.source = audioCtx.createOscillator(); this.modulator = audioCtx.createOscillator(); this.modGain = audioCtx.createGain();
                     this.source.type = this.type; this.modulator.type = 'sine'; this.modulator.connect(this.modGain); this.modGain.connect(this.source.frequency);
@@ -276,130 +329,93 @@
                     this.pulseGain = audioCtx.createGain(); this.source.connect(this.pulseGain); this.lfoGain.connect(this.pulseGain.gain); this.pulseGain.connect(this.pinnaFilter);
                     this.lfo.start(now);
                 }
-
                 this.pinnaFilter.connect(this.airFilter); this.airFilter.connect(this.panner); this.panner.connect(this.sidechainGain); this.sidechainGain.connect(this.gain);
                 this.updatePanner(true);
-                this.gain.gain.setValueAtTime(0.0001, now);
-                this.gain.gain.linearRampToValueAtTime(0.4, now + 0.1);
-                this.gain.connect(masterDry); this.gain.connect(convolver);
-                this.source.start(now);
-            }
-
-            // 修正 Tab 切換問題的關鍵
-            fadeOut() {
-                if (!this.gain) return;
-                const now = audioCtx.currentTime;
-                this.isFading = true;
-                this.gain.gain.cancelScheduledValues(now);
-                // 使用 setTargetAtTime 確保切換 Tab 時硬體仍會執行淡出
-                this.gain.gain.setTargetAtTime(0, now, 0.4); 
-                if (this.source) this.source.stop(now + 2.0);
-                setTimeout(() => {
-                    activeObjects = activeObjects.filter(o => o !== this);
-                }, 2000);
+                this.gain.gain.setTargetAtTime(0.4, now + 0.05, 0.22); this.gain.connect(masterDry); this.gain.connect(convolver);
+                this.source.start(now + 0.05);
             }
 
             updatePanner(isInit = false) {
-                if (!this.panner) return;
+                if (!this.panner || !audioCtx) return;
                 const now = audioCtx.currentTime;
                 const posX = (this.smoothedX / width) * 6 - 3;
                 const distZNorm = (this.smoothedY - listenerPlaneY) / (height * 0.4 || 1);
                 const posZ = distZNorm * 4.5;
+                const tc = 0.22; 
                 const rawDist = Math.sqrt(posX*posX + posZ*posZ);
                 if (!isInit) {
                     this.velocity = (rawDist - this.prevDist) * 75; 
-                    this.dopplerFactor = Math.max(0.4, Math.min(2.5, 100 / (100 + this.velocity)));
+                    const speedOfSound = 100; this.dopplerFactor = Math.max(0.4, Math.min(2.5, speedOfSound / (speedOfSound + this.velocity)));
                 }
                 this.prevDist = rawDist;
-                this.panner.positionX.setTargetAtTime(posX, now, 0.15);
-                this.panner.positionZ.setTargetAtTime(posZ, now, 0.15);
+                this.panner.positionX.setTargetAtTime(posX, now, tc);
+                this.panner.positionZ.setTargetAtTime(posZ, now, tc);
                 this.airFilter.frequency.setTargetAtTime(Math.max(400, 20000 - (Math.abs(distZNorm) * 18500)), now, 0.12);
-                this.pinnaFilter.gain.setTargetAtTime(posZ < 0 ? 3.5 : -9.0, now, 0.15);
-                
-                // 動態調變 (根據先前版本優化的參數)
+                this.pinnaFilter.gain.setTargetAtTime(posZ < 0 ? 3.5 : -9.0, now, tc);
+                let volBase = 0.5 * this.life;
+                if (this.isDragging) volBase *= (1.0 + (1.0 - Math.min(1.0, Math.abs(distZNorm))) * 1.2);
+                else if (this.isChallengeObject) volBase *= (1.0 + (1.0 - Math.min(1.0, Math.abs(distZNorm))) * 0.9);
                 if (this.type === 'noise' && this.filter) {
+                    this.filter.Q.setTargetAtTime(Math.max(1.5, 25 - (Math.abs(distZNorm) * 23.5)), now, 0.2);
                     this.filter.frequency.setTargetAtTime((4200 - (Math.abs(distZNorm) * 2500)) * this.dopplerFactor, now, 0.1);
+                    this.gain.gain.setTargetAtTime(volBase, now, tc);
                 } else if ((this.type === 'sine' || this.type === 'triangle') && this.modulator) {
                     const xRatio = (this.smoothedX / width);
-                    this.modulator.frequency.setTargetAtTime(0.5 + xRatio * (this.type === 'sine' ? 80 : 150), now, 0.15);
+                    this.modulator.frequency.setTargetAtTime(0.5 + xRatio * (this.type === 'sine' ? 80 : 150), now, tc);
+                    this.modGain.gain.setTargetAtTime(Math.max(0, (1 - Math.abs(distZNorm)) * (this.type === 'sine' ? 120 : 250) * this.life), now, tc);
                     const h = Math.max(0, Math.min(1, 1 - (this.smoothedY / height)));
-                    this.source.frequency.setTargetAtTime((180 + h * 450) * this.dopplerFactor, now, 0.15);
-                }
+                    this.source.frequency.setTargetAtTime((180 + h * 450) * this.dopplerFactor, now, tc);
+                    this.gain.gain.setTargetAtTime(volBase * 1.15, now, tc);
+                } else { this.gain.gain.setTargetAtTime(volBase, now, tc); }
             }
 
-            muteChallenge() { if(this.gain) this.gain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.8); }
-            cleanup() { if(this.source) try { this.source.stop(); } catch(e) {} }
-
+            muteChallenge() { 
+                if (this.gain) { 
+                    this.gain.gain.cancelScheduledValues(audioCtx.currentTime); 
+                    this.gain.gain.setTargetAtTime(0, audioCtx.currentTime, 1.2); 
+                } 
+            }
+            cleanup() { if(this.source) { try { this.source.stop(audioCtx.currentTime + 0.3); if(this.modulator) this.modulator.stop(audioCtx.currentTime + 0.3); if(this.lfo) this.lfo.stop(audioCtx.currentTime + 0.3); } catch(e) {} } this.source = null; }
             update() {
                 this.pulse += 0.08;
-                if (this.isDragging) {
-                    this.life = 1.0;
+                if (this.isDragging) { 
+                    this.life = 1.0; 
                     this.smoothedX += (this.x - this.smoothedX) * 0.22;
                     this.smoothedY += (this.y - this.smoothedY) * 0.22;
-                    this.updatePanner();
-                } else if (this.isChallengeObject && challengeState === 'listening') {
-                    this.updateCustomPath();
-                    this.smoothedX = this.x; this.smoothedY = this.y;
-                    this.updatePanner();
+                    this.updatePanner(); 
                 }
-                if (this.isFading) this.life -= 0.02;
+                else if (this.isChallengeObject && challengeState === 'listening') { this.updateCustomPath(); this.smoothedX = this.x; this.smoothedY = this.y; }
+                else if (this.isChallengeObject && challengeState === 'replaying') {
+                    if (replayIndex < this.trajectory.length) {
+                        const p = this.trajectory[replayIndex]; this.x = p.x; this.y = p.y;
+                        this.smoothedX += (this.x - this.smoothedX) * 0.22; this.smoothedY += (this.y - this.smoothedY) * 0.22;
+                        this.updatePanner(); replayIndex += 2; 
+                    } else { challengeState = 'feedback'; this.muteChallenge(); document.getElementById('feedback-controls').style.display = "flex"; document.getElementById('challenge-hint').innerHTML = "複習結束"; }
+                }
+                if (this.isFading) { this.life -= 1.0 / (60 * 16); if (this.life <= 0.001) { this.cleanup(); activeObjects = activeObjects.filter(o => o !== this); } else { this.updatePanner(); } }
             }
-            draw(ctx) {
-                if (this.isChallengeObject && (challengeState === 'listening' || challengeState === 'waiting_for_guess')) return;
-                if (this.life <= 0) return;
-                drawGeometry(ctx, this.type, this.x, this.y, 28 * uiScale, this.rgb, Math.max(0, this.life) * (this.isDragging ? 1.0 : 0.65), this.pulse);
-            }
+            draw(ctx) { if (this.isChallengeObject && (challengeState === 'listening' || challengeState === 'waiting_for_guess')) return; if (this.life <= 0) return; drawGeometry(ctx, this.type, this.x, this.y, 28 * uiScale, this.rgb, Math.max(0, this.life) * (this.isDragging ? 1.0 : 0.65), this.pulse); }
         }
 
-        // --- 其餘挑戰與事件邏輯 (均維持先前最穩定的版本) ---
-        window.toggleMode = () => {
-            initAudio(); isChallengeMode = !isChallengeMode;
-            const btn = document.getElementById('mode-toggle');
-            const scoreDisplay = document.getElementById('score-display');
-            const hint = document.getElementById('challenge-hint');
-            activeObjects.forEach(obj => obj.cleanup()); activeObjects = [];
-            if (challengeTarget) { challengeTarget.cleanup(); challengeTarget = null; }
-            document.getElementById('feedback-controls').style.display = "none";
-            totalScore = 0; scoreDisplay.innerText = `積分: ${totalScore}`;
-            if (isChallengeMode) {
-                btn.innerText = "退出訓練模式"; scoreDisplay.style.display = "block";
-                challengeState = 'preparing'; hint.innerHTML = "準備好了嗎？<br><span style='font-size:16px; color:#fff'>點擊畫面任何地方開始聽能定向挑戰</span>"; hint.style.opacity = 1;
-            } else {
-                btn.innerText = "開啟聽能定向挑戰"; scoreDisplay.style.display = "none"; hint.style.opacity = 0; challengeState = 'idle';
-            }
-        };
-
-        function startNewChallenge() {
-            challengeState = 'listening'; document.getElementById('feedback-controls').style.display = "none";
-            const hint = document.getElementById('challenge-hint'); hint.innerHTML = "請閉上眼聆聽聲音移動..."; hint.style.opacity = 1;
-            const randomType = Object.values(WAVE_TYPES)[Math.floor(Math.random() * 4)];
-            const rx = width*0.25 + Math.random()*width*0.5; const ry = height*0.25 + Math.random()*height*0.5;
-            challengeTarget = new DraggableSound(randomType, rx, ry);
-            challengeTarget.isChallengeObject = true; challengeTarget.trajectory = []; 
-            challengeTarget.moveDuration = 3500 + Math.random() * 2000; challengeTarget.startTime = Date.now();
-            const angleStart = Math.random() * Math.PI * 2; const angleSpeed = (Math.random() - 0.5) * 0.05;
-            const radius = 80 + Math.random() * 100 * uiScale;
-            challengeTarget.updateCustomPath = function() {
-                const elapsed = Date.now() - this.startTime;
-                if (elapsed < this.moveDuration) {
-                    this.x = rx + Math.cos(angleStart + angleSpeed * elapsed * 0.05) * radius;
-                    this.y = ry + Math.sin(angleStart + angleSpeed * elapsed * 0.05) * radius;
-                    this.trajectory.push({x: this.x, y: this.y});
-                } else {
-                    challengeState = 'waiting_for_guess'; this.muteChallenge();
-                    hint.innerHTML = "聲音已停止<br><span style='font-size:16px; color:#fff'>請點擊聲源最後消失的位置</span>";
-                }
-            };
-            challengeTarget.play();
+        function handleChallengeGuess(x, y) {
+            if (challengeState !== 'waiting_for_guess') return;
+            challengeState = 'feedback'; lastGuessX = x; lastGuessY = y;
+            const dist = Math.sqrt((x - challengeTarget.x)**2 + (y - challengeTarget.y)**2);
+            totalScore += Math.max(0, Math.round(100 * (1 - dist / (450 * uiScale))));
+            document.getElementById('score-display').innerText = `積分: ${totalScore}`;
+            document.getElementById('feedback-controls').style.display = "flex";
+            document.getElementById('challenge-hint').innerHTML = "方位座標已揭曉";
+            challengeTarget.life = 1.0;
         }
 
-        function setScene(scene) { initAudio(); currentScene = scene; document.querySelectorAll('.scene-btn').forEach(btn => btn.classList.remove('active')); event.target.classList.add('active'); applySceneAudio(scene); }
+        function setScene(scene) { initAudio(); currentScene = scene; document.querySelectorAll('.scene-btn').forEach(btn => btn.classList.remove('active')); if(event) event.target.classList.add('active'); applySceneAudio(scene); }
 
         function initLayout() {
             dpr = window.devicePixelRatio || 1; width = window.innerWidth; height = window.innerHeight;
             canvas.width = width * dpr; canvas.height = height * dpr; canvas.style.width = width + 'px'; canvas.style.height = height + 'px';
             ctx.scale(dpr, dpr); centerX = width / 2; centerY = height / 2; listenerPlaneY = height * 0.55; 
-            uiScale = Math.min(1.0, width / 1000) + 0.5; iconSize = Math.max(22, Math.min(36, width * 0.075));
+            uiScale = Math.min(1.0, width / 1000) + 0.5; 
+            iconSize = Math.max(22, Math.min(36, width * 0.075));
             const paletteX = width - iconSize * 1.6;
             paletteIcons = [
                 { typeConfig: WAVE_TYPES.SINE, x: paletteX, y: height * 0.15 },
@@ -407,11 +423,10 @@
                 { typeConfig: WAVE_TYPES.NOISE, x: paletteX, y: height * 0.41 },
                 { typeConfig: WAVE_TYPES.BOATMAN, x: paletteX, y: height * 0.54 }
             ];
-            initBackgroundVisuals();
         }
 
         function animate() {
-            drawUnderwaterBackground();
+            drawBackground();
             if (!isChallengeMode) {
                 ctx.fillStyle = 'rgba(255, 255, 255, 0.01)'; ctx.fillRect(width - iconSize * 2.5, 0, iconSize * 2.5, height);
                 paletteIcons.forEach(p => drawGeometry(ctx, p.typeConfig.id, p.x, p.y, iconSize, p.typeConfig.color, 0.85, Date.now()*0.002));
@@ -419,8 +434,16 @@
             activeObjects.forEach(obj => { obj.update(); obj.draw(ctx); });
             if (challengeTarget) {
                 challengeTarget.update(); challengeTarget.draw(ctx);
-                if (challengeState === 'feedback') {
-                    ctx.beginPath(); ctx.strokeStyle = "#ff4444"; ctx.lineWidth = 2; ctx.moveTo(centerX, centerY); ctx.lineTo(challengeTarget.x, challengeTarget.y); ctx.stroke();
+                if (challengeState === 'feedback' || challengeState === 'replaying') {
+                    ctx.beginPath(); ctx.strokeStyle = `rgba(${challengeTarget.rgb}, 0.4)`; ctx.lineWidth = 2; ctx.setLineDash([8, 4]);
+                    challengeTarget.trajectory.forEach((p, i) => { if(i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y); });
+                    ctx.stroke(); ctx.setLineDash([]);
+                    ctx.beginPath(); 
+                    const beamGrad = ctx.createLinearGradient(centerX, centerY, challengeTarget.x, challengeTarget.y);
+                    beamGrad.addColorStop(0, 'rgba(100, 220, 255, 0.1)'); beamGrad.addColorStop(1, `rgba(${challengeTarget.rgb}, 0.8)`);
+                    ctx.strokeStyle = beamGrad; ctx.lineWidth = 3; ctx.moveTo(centerX, centerY); ctx.lineTo(challengeTarget.x, challengeTarget.y); ctx.stroke();
+                    ctx.fillStyle = "#ff4444"; ctx.shadowBlur = 10; ctx.shadowColor = "#ff0000";
+                    ctx.beginPath(); ctx.arc(lastGuessX, lastGuessY, 6, 0, Math.PI*2); ctx.fill(); ctx.shadowBlur = 0;
                 }
             }
             requestAnimationFrame(animate);
@@ -428,39 +451,47 @@
 
         window.addEventListener('pointerdown', (e) => {
             if (e.target.closest('button') || e.target.closest('#scene-controls')) return;
-            initAudio(); const pt = { x: e.clientX, y: e.clientY };
+            
+            initAudio(); 
+            
+            const pt = { x: e.clientX, y: e.clientY };
+            
             if (isChallengeMode) { 
                 if (challengeState === 'preparing') { startNewChallenge(); return; } 
                 if (challengeState === 'waiting_for_guess') { handleChallengeGuess(pt.x, pt.y); return; } 
                 return; 
             }
+            
+            let paletteHit = false;
             paletteIcons.forEach(p => { 
-                if (Math.sqrt((pt.x-p.x)**2 + (pt.y-p.y)**2) < 45 * uiScale) { 
+                if (Math.sqrt((pt.x-p.x)**2 + (pt.y-p.y)**2) < 50 * uiScale) { 
                     const n = new DraggableSound(p.typeConfig, pt.x, pt.y); 
-                    n.isDragging = true; n.pointerId = e.pointerId; 
-                    activeObjects.push(n); activePointers.set(e.pointerId, n); n.play(); 
+                    n.isDragging = true; 
+                    n.pointerId = e.pointerId; 
+                    activeObjects.push(n); 
+                    activePointers.set(e.pointerId, n); 
+                    n.play(); 
+                    paletteHit = true;
                 } 
             });
+
+            if (paletteHit) return;
+
             for (let i = activeObjects.length - 1; i >= 0; i--) { 
-                const obj = activeObjects[i]; if (Math.sqrt((pt.x-obj.x)**2 + (pt.y-obj.y)**2) < 55 * uiScale) { 
-                    obj.isDragging = true; obj.pointerId = e.pointerId; activePointers.set(e.pointerId, obj); return; 
+                const obj = activeObjects[i]; 
+                if (Math.sqrt((pt.x-obj.x)**2 + (pt.y-obj.y)**2) < 55 * uiScale) { 
+                    obj.isDragging = true; 
+                    obj.pointerId = e.pointerId; 
+                    activePointers.set(e.pointerId, obj); 
+                    activeObjects.push(activeObjects.splice(i, 1)[0]); 
+                    return; 
                 } 
             }
-        });
+        }, { passive: false });
 
         window.addEventListener('pointermove', (e) => { const obj = activePointers.get(e.pointerId); if (obj) { obj.x = e.clientX; obj.y = e.clientY; } });
-        window.addEventListener('pointerup', (e) => { 
-            const obj = activePointers.get(e.pointerId); if (obj) { obj.isDragging = false; obj.fadeOut(); activePointers.delete(e.pointerId); } 
-        });
+        window.addEventListener('pointerup', (e) => { const obj = activePointers.get(e.pointerId); if (obj) { obj.isDragging = false; obj.isFading = true; activePointers.delete(e.pointerId); } });
         window.addEventListener('resize', initLayout); initLayout(); animate();
-
-        function handleChallengeGuess(x, y) {
-            challengeState = 'feedback'; lastGuessX = x; lastGuessY = y;
-            document.getElementById('feedback-controls').style.display = "flex";
-            challengeTarget.life = 1.0;
-        }
-        function startReplay() { /* 邏輯同前 */ }
-        function prepareNextChallenge() { /* 邏輯同前 */ }
     </script>
 </body>
 </html>
