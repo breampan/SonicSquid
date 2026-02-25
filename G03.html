@@ -48,7 +48,7 @@
 
         /* 中央提示文字 */
         #center-hint {
-            position: absolute; top: 45%; left: 50%; transform: translate(-50%, -50%);
+            position: absolute; top: 42%; left: 50%; transform: translate(-50%, -50%);
             color: #fff; font-size: 20px; pointer-events: none; opacity: 0;
             transition: opacity 0.5s; text-align: center; z-index: 50;
             text-shadow: 0 0 20px rgba(100, 220, 255, 0.8); line-height: 1.6; width: 85%;
@@ -71,9 +71,6 @@
         <button id="mode-toggle" class="action-btn" onclick="toggleMode()">開啟 12 方位定點挑戰</button>
         <div id="round-display" class="round-panel">回合: 1 / 5</div>
         <div id="score-display" class="score-panel">總積分: 0</div>
-        <div id="feedback-controls" class="challenge-actions" style="display:none">
-            <button class="action-btn" onclick="replayCurrent()">重播此題聲音</button>
-        </div>
     </div>
 
     <div id="center-hint">請閉上眼聆聽...</div>
@@ -106,10 +103,10 @@
     <script>
         /**
          * 聽能定向訓練系統 - 12 方位定點版
-         * 修復：
-         * 1. 視覺比例同步：挑戰模式中方位圖示始終保持在外圈位置，防止揭曉答案時因距離較近而縮小塌陷。
-         * 2. 音訊無縫銜接：保留 Max/MSP line~ 風格的 Fade Ramp，徹底根除 Click 與爆音。
-         * 3. 真實背景音 (Ambiance)：透過 Crossfade 提供沉浸式場景。
+         * 修正更新：
+         * 1. 重播按鈕優化：移至畫面正中央「進入下一題」文字下方，並配有「再聽一次」標註。
+         * 2. 視覺防重疊：確保挑戰模式下圖示始終保持在外圈，揭曉答案時不產生視覺塌陷。
+         * 3. 聲學無雜音：採用音場 Crossfade 與 50ms 播放淡入淡出。
          */
         const canvas = document.getElementById('appCanvas');
         const ctx = canvas.getContext('2d');
@@ -379,9 +376,9 @@
             else if (diffIdx === 1) { roundScore = 15; feedbackText = "非常接近，只有一格偏差"; color = "#10dcff"; }
             else if (diffIdx === 2) { roundScore = 10; feedbackText = "方向大致正確，繼續保持"; color = "#ffaa44"; }
             else if (diffIdx === 3) { roundScore = 5; feedbackText = "略有偏離，注意前後差異"; color = "#ff7744"; }
-            else { roundScore = 0; feedbackText = "完全相反囉！請點擊圖案重播校對"; color = "#ff4444"; }
+            else { roundScore = 0; feedbackText = "完全相反囉！可以重播校對聽感"; color = "#ff4444"; }
             totalScore += roundScore; document.getElementById('score-display').innerText = `總積分: ${totalScore}`;
-            const nextT = (currentRound >= MAX_ROUNDS) ? "點擊畫面查看總結算" : "點擊畫面進入下一題";
+            const nextT = (currentRound >= MAX_ROUNDS) ? "點擊背景查看總結算" : "點擊背景進入下一題";
             document.getElementById('center-hint').innerHTML = `<div class="feedback-score" style="color:${color}">+${roundScore} 分</div>${feedbackText}<br><span style='font-size:16px; color:#fff'>${nextT}</span>`;
         }
 
@@ -398,6 +395,7 @@
 
         function drawBackground() {
             const cfg = SCENE_CONFIG[currentScene];
+            const t = Date.now() * 0.001 * cfg.flow;
             const bgGrad = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, height * 1.1);
             bgGrad.addColorStop(0, cfg.bg); bgGrad.addColorStop(1, '#000000');
             ctx.fillStyle = bgGrad; ctx.fillRect(0, 0, width, height);
@@ -439,31 +437,48 @@
             ctx.restore();
         }
 
+        // --- 修正：重播小按鈕現在繪製於盤面下方中央 ---
         function drawReplayButton(x, y, colorStr, isHovered) {
-            const r = 18 * uiScale;
+            const r = 24 * uiScale;
             replayBtnHitArea = { x, y, r };
-            ctx.save(); ctx.translate(x, y);
-            ctx.shadowBlur = isHovered ? 15 : 5; ctx.shadowColor = `rgba(${colorStr}, 0.5)`;
-            ctx.fillStyle = isHovered ? `rgba(${colorStr}, 0.4)` : `rgba(${colorStr}, 0.2)`;
-            ctx.strokeStyle = `rgba(255, 255, 255, 0.8)`; ctx.lineWidth = 1.5;
+            ctx.save();
+            ctx.translate(x, y);
+            
+            // 背景圓
+            ctx.shadowBlur = isHovered ? 20 : 8;
+            ctx.shadowColor = `rgba(${colorStr}, 0.6)`;
+            ctx.fillStyle = isHovered ? `rgba(${colorStr}, 0.45)` : `rgba(${colorStr}, 0.25)`;
+            ctx.strokeStyle = `rgba(255, 255, 255, 0.85)`;
+            ctx.lineWidth = 2.0;
             ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI*2); ctx.fill(); ctx.stroke();
-            ctx.fillStyle = "#fff"; const triSize = r * 0.5;
-            ctx.beginPath(); ctx.moveTo(triSize * 0.6, 0); ctx.lineTo(-triSize * 0.4, -triSize * 0.5); ctx.lineTo(-triSize * 0.4, triSize * 0.5); ctx.closePath(); ctx.fill();
+            
+            // 播放三角形
+            ctx.fillStyle = "#fff";
+            const triSize = r * 0.55;
+            ctx.beginPath();
+            ctx.moveTo(triSize * 0.6, 0);
+            ctx.lineTo(-triSize * 0.4, -triSize * 0.5);
+            ctx.lineTo(-triSize * 0.4, triSize * 0.5);
+            ctx.closePath();
+            ctx.fill();
+
+            // 「再聽一次」文字標註
+            ctx.font = `bold ${14 * uiScale}px sans-serif`;
+            ctx.textAlign = "center";
+            ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
+            ctx.fillText("再聽一次", 0, r + 22 * uiScale);
+
             ctx.restore();
         }
 
         function animate() {
-            // 【關鍵修正】：挑戰模式中始終將目標視覺半徑設為 3.0m (visualFactor = 1.0)
-            // 確保「題目出現時」與「答案揭曉時」的圖示環位置一致，不縮小塌陷
             let targetActiveDist = isChallengeMode ? 3.0 : currentRadius;
             currentVisualFactor += (getRadiusFactor(targetActiveDist) - currentVisualFactor) * 0.12; 
-            
             for (let i = 0; i < 12; i++) {
                 const rad = clockNodes[i].angle * Math.PI / 180;
                 clockNodes[i].x = centerX + Math.sin(rad) * displayRadiusX * currentVisualFactor;
                 clockNodes[i].y = centerY - Math.cos(rad) * displayRadiusY * currentVisualFactor;
             }
-            
             drawBackground();
             const now = Date.now(); const pulse = now * 0.002;
             paletteIcons.forEach(p => {
@@ -471,7 +486,6 @@
                 drawGeometry(ctx, p.typeConfig.id, p.x, p.y, iconSize, p.typeConfig.color, isActive ? 1.0 : 0.4, pulse, isActive ? 1.2 : 1.0);
                 if (isActive) { ctx.strokeStyle = `rgba(${p.typeConfig.color}, 0.8)`; ctx.beginPath(); ctx.arc(p.x, p.y, iconSize * 2, 0, Math.PI*2); ctx.stroke(); }
             });
-            
             const renderType = isChallengeMode ? targetType : activeSoundType;
             if (renderType) {
                 for (let i = 0; i < 12; i++) {
@@ -484,20 +498,12 @@
                             if (i === targetAngleIndex) {
                                 alpha = 1.0; scale = 1.3;
                                 ctx.beginPath(); 
-                                // 此處連線長度依然反映真實距離 (用 targetDistance)
                                 const beamLen = getRadiusFactor(targetDistance);
                                 const beamX = centerX + (node.x - centerX) * beamLen;
                                 const beamY = centerY + (node.y - centerY) * beamLen;
                                 const beam = ctx.createLinearGradient(centerX, centerY, beamX, beamY);
                                 beam.addColorStop(0, 'rgba(100, 220, 255, 0.1)'); beam.addColorStop(1, `rgba(${renderType.color}, 0.9)`);
                                 ctx.strokeStyle = beam; ctx.lineWidth = 3; ctx.moveTo(centerX, centerY); ctx.lineTo(beamX, beamY); ctx.stroke();
-                                
-                                // 重播按鈕
-                                const rad = node.angle * Math.PI / 180;
-                                const btnDist = 45 * uiScale;
-                                const btnX = node.x + Math.sin(rad) * btnDist;
-                                const btnY = node.y - Math.cos(rad) * btnDist;
-                                drawReplayButton(btnX, btnY, renderType.color, hoveredNodeIndex === 999);
                             } else if (i === guessIndex) {
                                 alpha = 0.8; ctx.fillStyle = "#ff4444"; ctx.shadowBlur = 15; ctx.shadowColor = "#ff0000";
                                 ctx.beginPath(); ctx.arc(node.x, node.y, 8, 0, Math.PI*2); ctx.fill(); ctx.shadowBlur = 0;
@@ -510,6 +516,14 @@
                     drawGeometry(ctx, renderType.id, node.x, node.y, iconSize, renderType.color, alpha, pulse, scale);
                 }
             }
+            
+            // 在中央提示文字下方繪製重播按鈕 (僅在反饋階段)
+            if (isChallengeMode && (challengeState === 'feedback' || challengeState === 'replaying')) {
+                const btnX = centerX;
+                const btnY = centerY + 105 * uiScale; // 位於人頭中心點下方，避開文字
+                drawReplayButton(btnX, btnY, renderType.color, hoveredNodeIndex === 999);
+            }
+
             requestAnimationFrame(animate);
         }
 
