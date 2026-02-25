@@ -102,10 +102,12 @@
 
     <script>
         /**
-         * 聽能定向訓練系統 - 12 方位定點版 (參數統一等化版)
-         * 1. 響度等化：針對四種音色進行主觀音量補償，確保測驗公信力。
-         * 2. 時值統一：發聲長度精確固定於 2.0 秒，消除時間差線索。
-         * 3. 重播優化：按鈕置於中央提示下方，附帶文字導引。
+         * 聽能定向訓練系統 - 12 方位定點版 (完全更新版)
+         * 整合內容：
+         * 1. 聲學校準：2.0s 統一時值、主觀響度等化。
+         * 2. 仿生視覺：劃蝽有機體模型 + 划水動畫。
+         * 3. 空間邏輯：12 方位陣列，挑戰模式固定視覺半徑。
+         * 4. 交互優化：中央重播按鈕、點擊背景前進、無雜音 crossfade。
          */
         const canvas = document.getElementById('appCanvas');
         const ctx = canvas.getContext('2d');
@@ -124,7 +126,7 @@
         let currentRound = 1;
         let totalScore = 0;
         const MAX_ROUNDS = 5;
-        const CONSTANT_DURATION = 2.0; // 統一發聲時值
+        const CONSTANT_DURATION = 2.0; // 統一發聲長度
 
         let targetAngleIndex = 0;
         let targetDistance = 1.0;
@@ -186,7 +188,7 @@
                     }
                 };
                 const fadeIn = () => {
-                    if (this.audio.volume < 0.12) { // 稍微降低環境音量避免干擾測驗
+                    if (this.audio.volume < 0.12) {
                         this.audio.volume = Math.min(0.12, this.audio.volume + 0.01);
                         this.fadeTimeout = setTimeout(fadeIn, 40);
                     }
@@ -264,33 +266,25 @@
         // --- 核心播放器 (響度等化與時值統一版) ---
         class DirectionalPlayer {
             constructor() { this.source = null; this.modulator = null; this.lfo = null; this.gain = null; this.panner = null; }
-            
             play(typeConfig, angleDeg, distance, duration = CONSTANT_DURATION) {
                 if (!audioCtx) return; this.stop(); 
                 const now = audioCtx.currentTime;
                 this.gain = audioCtx.createGain(); this.panner = audioCtx.createPanner();
                 const air = audioCtx.createBiquadFilter(); air.type = 'lowpass';
                 const pinna = audioCtx.createBiquadFilter(); pinna.type = 'highshelf';
-                
                 this.panner.panningModel = (typeConfig.id === 'sine') ? 'equalpower' : 'HRTF';
                 this.panner.distanceModel = 'inverse'; this.panner.refDistance = 1.0; this.panner.rolloffFactor = 1.8;   
-                
                 const rad = angleDeg * Math.PI / 180;
                 this.panner.positionX.value = Math.sin(rad) * distance * 2.5; 
                 this.panner.positionZ.value = -Math.cos(rad) * distance * 2.5;
-                
                 air.frequency.value = Math.max(400, 20000 - (distance * 3500));
                 pinna.gain.value = this.panner.positionZ.value < 0 ? 3.5 : -9.0; 
-
-                // 【時值與音量統一】：Attack 50ms, Release 150ms
-                const attackTime = 0.05;  
-                const releaseTime = 0.15;  
                 
-                // 響度歸一化映射：正弦波與三角波較響，噪音與脈衝需補償
+                const attackTime = 0.05; const releaseTime = 0.15;  
                 let targetVol = 0.45;
                 if (typeConfig.id === 'sine') targetVol = 0.42;
                 if (typeConfig.id === 'triangle') targetVol = 0.38;
-                if (typeConfig.id === 'noise') targetVol = 0.58; // 寬頻噪音需要較大增益達成相同響度
+                if (typeConfig.id === 'noise') targetVol = 0.58; 
                 if (typeConfig.id === 'boatman') targetVol = 0.48;
 
                 this.gain.gain.setValueAtTime(0.0001, now);
@@ -437,7 +431,6 @@
             const glow = ctx.createRadialGradient(0, 0, 0, 0, 0, currentSize * 3);
             glow.addColorStop(0, `rgba(${rgbStr}, ${alpha * 0.5})`); glow.addColorStop(1, 'transparent');
             ctx.fillStyle = glow; ctx.beginPath(); ctx.arc(0, 0, currentSize * 3, 0, Math.PI * 2); ctx.fill();
-            
             ctx.fillStyle = `rgba(${rgbStr}, ${alpha})`; ctx.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.9})`; ctx.lineWidth = 2.0;
             
             if (type === 'sine') {
@@ -457,14 +450,9 @@
                 const s = currentSize * 0.9;
                 const breath = Math.sin(pulse * 2.5) * 0.08 + 1.0; 
                 const paddle = Math.sin(pulse * 4); 
-                ctx.save();
-                ctx.scale(breath, breath);
-                ctx.beginPath();
-                ctx.ellipse(0, -s * 0.6, s * 0.4, s * 0.3, 0, 0, Math.PI * 2);
-                ctx.ellipse(0, s * 0.1, s * 0.55, s * 0.85, 0, 0, Math.PI * 2);
-                ctx.fill(); ctx.stroke();
-                ctx.fillStyle = "rgba(255, 255, 255, 0.8)";
-                ctx.beginPath(); ctx.arc(-s * 0.2, -s * 0.65, s * 0.1, 0, Math.PI * 2); ctx.arc(s * 0.2, -s * 0.65, s * 0.1, 0, Math.PI * 2); ctx.fill();
+                ctx.save(); ctx.scale(breath, breath);
+                ctx.beginPath(); ctx.ellipse(0, -s * 0.6, s * 0.4, s * 0.3, 0, 0, Math.PI * 2); ctx.ellipse(0, s * 0.1, s * 0.55, s * 0.85, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+                ctx.fillStyle = "rgba(255, 255, 255, 0.8)"; ctx.beginPath(); ctx.arc(-s * 0.2, -s * 0.65, s * 0.1, 0, Math.PI * 2); ctx.arc(s * 0.2, -s * 0.65, s * 0.1, 0, Math.PI * 2); ctx.fill();
                 ctx.lineWidth = 2.5 * uiScale; ctx.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.9})`;
                 ctx.beginPath(); ctx.moveTo(-s * 0.3, 0); ctx.lineTo(-s * 1.5, s * 0.6 + paddle * s * 0.4); ctx.stroke();
                 ctx.beginPath(); ctx.moveTo(s * 0.3, 0); ctx.lineTo(s * 1.5, s * 0.6 + paddle * s * 0.4); ctx.stroke();
@@ -474,8 +462,7 @@
         }
 
         function drawReplayButton(x, y, colorStr, isHovered) {
-            const r = 24 * uiScale;
-            replayBtnHitArea = { x, y, r };
+            const r = 24 * uiScale; replayBtnHitArea = { x, y, r };
             ctx.save(); ctx.translate(x, y);
             ctx.shadowBlur = isHovered ? 20 : 8; ctx.shadowColor = `rgba(${colorStr}, 0.6)`;
             ctx.fillStyle = isHovered ? `rgba(${colorStr}, 0.45)` : `rgba(${colorStr}, 0.25)`;
