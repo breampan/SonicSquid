@@ -50,8 +50,8 @@
 
         /* 中央提示文字 */
         #center-hint {
-            position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%);
-            color: #fff; font-size: 24px; pointer-events: none; opacity: 0;
+            position: absolute; top: 45%; left: 50%; transform: translate(-50%, -50%);
+            color: #fff; font-size: 20px; pointer-events: none; opacity: 0;
             transition: opacity 0.5s; text-align: center; z-index: 50;
             text-shadow: 0 0 20px rgba(100, 220, 255, 0.8); line-height: 1.6; width: 85%;
         }
@@ -108,11 +108,10 @@
 
     <script>
         /**
-         * 聽能定向訓練系統 - 12 方位定點挑戰版
-         * 核心機制：
-         * 1. 12 個定點方位陣列，支援 Hover 呼吸光澤效果。
-         * 2. 0.5m ~ 3m 多段距離空間渲染。
-         * 3. 專業 5 回合挑戰制，具備角度誤差計分系統與語音提示對齊。
+         * 聽能定向訓練系統 - 12 方位定點挑戰版 (動態半徑適配)
+         * 1. 手機音訊解鎖：嚴格在 pointerdown 同步執行 resume()。
+         * 2. 動態半徑 (Lerp)：選取距離時，陣列平滑縮放至對應同心圓 (0.5m~3m)。
+         * 3. 挑戰揭曉：猜測時圖示置於外圈，揭曉時瞬間顯示正確距離。
          */
         const canvas = document.getElementById('appCanvas');
         const ctx = canvas.getContext('2d');
@@ -126,6 +125,7 @@
         // 系統狀態
         let currentScene = 'bathroom';
         let currentRadius = 1.0;
+        let currentVisualFactor = 0.5; // 動態視覺縮放比例 (0.25, 0.5, 0.75, 1.0)
         let isChallengeMode = false;
         let challengeState = 'idle'; // idle, listening, guessing, feedback
         let currentRound = 1;
@@ -159,14 +159,14 @@
         const ANGLES_DEG = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330];
         let clockNodes = [];
         let hoveredNodeIndex = -1;
-        let activeSoundType = WAVE_TYPES.SINE; // 預設選擇的音色
+        let activeSoundType = WAVE_TYPES.SINE; // 預設音色
         let paletteIcons = [];
         
         let noiseBuffer = null;
-        let audioPlayer = null; // 單一播放器實例
+        let audioPlayer = null; 
 
         // --- 音訊引擎初始化 ---
-        async function initAudio() {
+        function initAudio() {
             if (!audioCtx) {
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)();
                 masterCompressor = audioCtx.createDynamicsCompressor();
@@ -183,7 +183,10 @@
                 for (let i = 0; i < bufferSize; i++) output[i] = Math.random() * 2 - 1;
                 applySceneAudio(currentScene);
             }
-            if (audioCtx.state === 'suspended') await audioCtx.resume();
+            // 關鍵：行動裝置同步喚醒
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
         }
 
         function applySceneAudio(scene) {
@@ -207,7 +210,6 @@
             masterDry.gain.setTargetAtTime(cfg.dry, now, 0.15);
             masterWet.gain.setTargetAtTime(cfg.wet, now, 0.15);
             
-            // 更新按鈕視覺
             document.querySelectorAll('#scene-controls .ctrl-btn').forEach(btn => {
                 btn.classList.remove('active');
                 if(btn.innerText.includes(getSceneName(scene))) btn.classList.add('active');
@@ -219,8 +221,16 @@
             if(key==='cave') return '海洞'; return '森林';
         }
 
+        function getRadiusFactor(dist) {
+            if (dist <= 0.5) return 0.25;
+            if (dist <= 1.0) return 0.50;
+            if (dist <= 2.0) return 0.75;
+            return 1.0;
+        }
+
         window.setScene = (scene) => { initAudio(); currentScene = scene; applySceneAudio(scene); };
         window.setRadius = (r) => {
+            initAudio();
             currentRadius = r;
             document.querySelectorAll('#radius-controls .ctrl-btn').forEach(btn => {
                 btn.classList.remove('active');
@@ -228,7 +238,7 @@
             });
         };
 
-        // --- 核心播放器 (靜態 12 方位版) ---
+        // --- 核心播放器 (靜態定位) ---
         class DirectionalPlayer {
             constructor() {
                 this.source = null; this.modulator = null; this.lfo = null;
@@ -238,7 +248,7 @@
             
             play(typeConfig, angleDeg, distance, duration = 2.5) {
                 if (!audioCtx) return;
-                this.stop(); // 停止上一個聲音
+                this.stop(); 
                 const now = audioCtx.currentTime;
                 
                 this.gain = audioCtx.createGain(); 
@@ -251,21 +261,20 @@
                 this.panner.refDistance = 1.0; 
                 this.panner.rolloffFactor = 1.8;   
                 
-                // 計算 Web Audio 空間座標 (0度正前方, 90度右方)
+                // Web Audio 空間座標 (0度正前方, 90度右方)
                 const rad = angleDeg * Math.PI / 180;
-                // Web Audio 座標系: X右, Y上, Z前(負值)
                 const posX = Math.sin(rad) * distance * 2.5; 
                 const posZ = -Math.cos(rad) * distance * 2.5;
                 
                 this.panner.positionX.value = posX;
                 this.panner.positionZ.value = posZ;
                 
-                // 空氣吸收與耳廓濾波
+                // 物理校正：空氣吸收與後方耳廓衰減
                 const zAbs = Math.abs(posZ/5);
                 this.airFilter.frequency.value = Math.max(400, 20000 - (distance * 3500));
-                this.pinnaFilter.gain.value = posZ < 0 ? 3.5 : -9.0; // 後方衰減
+                this.pinnaFilter.gain.value = posZ < 0 ? 3.5 : -9.0; 
 
-                // 音量動態包絡 (Burst envelope)
+                // 動態包絡 (Attack/Release)
                 this.gain.gain.setValueAtTime(0.0001, now);
                 let targetVol = 0.5;
                 if (typeConfig.id === 'sine' || typeConfig.id === 'triangle') targetVol = 0.6;
@@ -280,7 +289,6 @@
                     this.modulator.connect(this.modGain); this.modGain.connect(this.source.frequency);
                     this.source.connect(this.pinnaFilter); 
                     
-                    // 根據方位決定 FM 參數
                     const modFreq = 0.5 + Math.abs(posX) * 10;
                     this.modulator.frequency.value = modFreq;
                     this.modGain.gain.value = Math.max(0, (1 - distance/4) * (typeConfig.id === 'sine' ? 120 : 250));
@@ -323,9 +331,9 @@
             }
         }
 
-        // --- 挑戰流程邏輯 ---
-        window.toggleMode = async () => {
-            await initAudio();
+        // --- 挑戰流程 ---
+        window.toggleMode = () => {
+            initAudio();
             if (audioPlayer) audioPlayer.stop();
             isChallengeMode = !isChallengeMode;
             
@@ -345,14 +353,14 @@
                 btn.innerText = "退出挑戰模式";
                 scoreDisplay.style.display = "block";
                 roundDisplay.style.display = "block";
-                radiusControls.style.display = "none"; // 挑戰模式隱藏手動半徑
+                radiusControls.style.display = "none"; 
                 
                 totalScore = 0; currentRound = 1;
                 scoreDisplay.innerText = `總積分: 0`;
                 roundDisplay.innerText = `回合: 1 / 5`;
                 
                 challengeState = 'preparing';
-                hint.innerHTML = "準備好了嗎？<br><span style='font-size:16px; color:#fff'>點擊畫面任何地方開始測驗</span>";
+                hint.innerHTML = "準備好了嗎？<br><span style='font-size:16px; color:#fff'>點擊畫面任何地方開始</span>";
                 hint.style.opacity = 1;
             } else {
                 btn.innerText = "開啟 12 方位定點挑戰";
@@ -366,7 +374,6 @@
 
         window.nextRound = () => {
             if (currentRound >= MAX_ROUNDS) {
-                // 結算
                 challengeState = 'finished';
                 document.getElementById('feedback-controls').style.display = "none";
                 document.getElementById('center-hint').style.opacity = 0;
@@ -395,23 +402,19 @@
             hint.innerHTML = "請閉上眼，專注聆聽...";
             hint.style.opacity = 1;
             
-            // 隨機生成題目
+            // 隨機題目
             targetAngleIndex = Math.floor(Math.random() * 12);
             targetDistance = DISTANCES[Math.floor(Math.random() * DISTANCES.length)];
             const rTypeIdx = Math.floor(Math.random() * 4);
             targetType = Object.values(WAVE_TYPES)[rTypeIdx];
             targetScene = SCENE_KEYS[Math.floor(Math.random() * SCENE_KEYS.length)];
-            
-            // 套用隨機聲場
             setScene(targetScene);
             
-            // 播放聲音 (2.5秒)
             if (!audioPlayer) audioPlayer = new DirectionalPlayer();
             audioPlayer.play(targetType, ANGLES_DEG[targetAngleIndex], targetDistance, 2.5);
             
-            // 2.5秒後進入猜測模式
             setTimeout(() => {
-                if (challengeState !== 'listening') return; // 可能中途退出了
+                if (challengeState !== 'listening') return; 
                 challengeState = 'guessing';
                 hint.innerHTML = "聲音來自哪個方位？<br><span style='font-size:16px; color:#fff'>請點擊對應的圖示</span>";
             }, 2600);
@@ -428,19 +431,15 @@
             guessIndex = index;
             challengeState = 'feedback';
             
-            // 計算角度誤差
             let diffIdx = Math.abs(guessIndex - targetAngleIndex);
-            if (diffIdx > 6) diffIdx = 12 - diffIdx; // 最遠差 6 格 (180度)
+            if (diffIdx > 6) diffIdx = 12 - diffIdx;
             
-            let roundScore = 0;
-            let feedbackText = "";
-            let color = "#fff";
-            
-            if (diffIdx === 0) { roundScore = 20; feedbackText = "太棒了！完全正確！"; color = "#44ffaa"; }
-            else if (diffIdx === 1) { roundScore = 15; feedbackText = "非常接近！只有一格的偏差"; color = "#10dcff"; }
-            else if (diffIdx === 2) { roundScore = 10; feedbackText = "方向大致正確，再精確一點"; color = "#ffaa44"; }
-            else if (diffIdx === 3) { roundScore = 5; feedbackText = "稍微偏離了，注意前後差異"; color = "#ff7744"; }
-            else { roundScore = 0; feedbackText = "哎呀，完全相反囉！仔細聽聽看"; color = "#ff4444"; }
+            let roundScore = 0; let feedbackText = ""; let color = "#fff";
+            if (diffIdx === 0) { roundScore = 20; feedbackText = "完全命中！精確的空間感"; color = "#44ffaa"; }
+            else if (diffIdx === 1) { roundScore = 15; feedbackText = "非常接近，只有一格偏差"; color = "#10dcff"; }
+            else if (diffIdx === 2) { roundScore = 10; feedbackText = "方向大致正確，繼續保持"; color = "#ffaa44"; }
+            else if (diffIdx === 3) { roundScore = 5; feedbackText = "略有偏離，注意前後的濾波差異"; color = "#ff7744"; }
+            else { roundScore = 0; feedbackText = "完全相反囉！請試著重播校對"; color = "#ff4444"; }
             
             totalScore += roundScore;
             document.getElementById('score-display').innerText = `總積分: ${totalScore}`;
@@ -449,8 +448,7 @@
             hint.innerHTML = `<div class="feedback-score" style="color:${color}">+${roundScore} 分</div>${feedbackText}`;
             
             document.getElementById('feedback-controls').style.display = "flex";
-            const nextBtn = document.getElementById('next-btn');
-            nextBtn.innerText = (currentRound >= MAX_ROUNDS) ? "查看總結算" : "下一題";
+            document.getElementById('next-btn').innerText = (currentRound >= MAX_ROUNDS) ? "查看總結算" : "下一題";
         }
 
 
@@ -461,25 +459,21 @@
             canvas.width = width * dpr; canvas.height = height * dpr; 
             canvas.style.width = width + 'px'; canvas.style.height = height + 'px';
             ctx.scale(dpr, dpr); 
-            centerX = width / 2; listenerPlaneY = height * 0.52; centerY = listenerPlaneY;
+            centerX = width / 2; listenerPlaneY = height * 0.48; centerY = listenerPlaneY;
             
-            uiScale = Math.min(1.0, width / 1000) + 0.3; 
-            iconSize = Math.max(18, Math.min(30, width * 0.06));
+            uiScale = Math.min(1.0, width / 1000) + 0.2; 
+            iconSize = Math.max(16, Math.min(28, width * 0.05));
             
-            // 12 方位座標計算
-            displayRadiusX = Math.min(width * 0.38, height * 0.35);
-            displayRadiusY = displayRadiusX * 0.75; // 橢圓透視
+            displayRadiusX = Math.min(width * 0.4, height * 0.38);
+            displayRadiusY = displayRadiusX * 0.75; 
             
-            clockNodes = [];
-            for(let i=0; i<12; i++) {
-                const angleDeg = ANGLES_DEG[i];
-                const rad = angleDeg * Math.PI / 180;
-                const nx = centerX + Math.sin(rad) * displayRadiusX;
-                const ny = centerY - Math.cos(rad) * displayRadiusY; // 0度在正上方(視覺前方)
-                clockNodes.push({ x: nx, y: ny, angle: angleDeg });
+            if(clockNodes.length === 0) {
+                for(let i=0; i<12; i++) {
+                    clockNodes.push({ angle: ANGLES_DEG[i], x: 0, y: 0 });
+                }
             }
 
-            const paletteX = width - iconSize * 1.8;
+            const paletteX = width - iconSize * 2.0;
             paletteIcons = [
                 { typeConfig: WAVE_TYPES.SINE, x: paletteX, y: height * 0.20 },
                 { typeConfig: WAVE_TYPES.TRIANGLE, x: paletteX, y: height * 0.35 },
@@ -495,7 +489,6 @@
             bgGrad.addColorStop(0, cfg.bg); bgGrad.addColorStop(1, '#000000');
             ctx.fillStyle = bgGrad; ctx.fillRect(0, 0, width, height);
             
-            // 繪製雷達網格
             ctx.lineWidth = 1; ctx.strokeStyle = cfg.main + '22';
             for (let i = 0; i < 12; i++) {
                 const rad = ANGLES_DEG[i] * Math.PI / 180;
@@ -503,13 +496,12 @@
                 ctx.lineTo(centerX + Math.sin(rad) * width, centerY - Math.cos(rad) * height); 
                 ctx.stroke();
             }
-            for (let r = 1; r < 5; r++) {
+            for (let r = 1; r <= 4; r++) {
                 ctx.beginPath(); 
-                ctx.ellipse(centerX, centerY, (displayRadiusX/3)*r, (displayRadiusY/3)*r, 0, 0, Math.PI * 2); 
+                ctx.ellipse(centerX, centerY, displayRadiusX * (r/4), displayRadiusY * (r/4), 0, 0, Math.PI * 2); 
                 ctx.stroke();
             }
             
-            // 聽者頭部中心
             ctx.save(); ctx.shadowBlur = 20; ctx.shadowColor = cfg.main + '55'; 
             ctx.fillStyle = cfg.main + '33'; ctx.strokeStyle = cfg.main + 'aa';
             ctx.beginPath(); ctx.ellipse(centerX, centerY + 5, 24, 10, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
@@ -551,12 +543,35 @@
         }
 
         function animate() {
+            // 【核心動態半徑邏輯】：平滑 Lerp
+            let targetActiveDist = 1.0;
+            if (isChallengeMode) {
+                // 挑戰模式：猜測時為了方便點擊，保持在外圈(3.0m)，揭曉時縮到正確距離
+                if (challengeState === 'feedback' || challengeState === 'replaying') targetActiveDist = targetDistance;
+                else targetActiveDist = 3.0; 
+            } else {
+                // 沙盒模式：跟隨下方按鈕
+                targetActiveDist = currentRadius;
+            }
+
+            const targetScale = getRadiusFactor(targetActiveDist);
+            currentVisualFactor += (targetScale - currentVisualFactor) * 0.12; 
+            
+            const currentDisplayRx = displayRadiusX * currentVisualFactor;
+            const currentDisplayRy = displayRadiusY * currentVisualFactor;
+            
+            for (let i = 0; i < 12; i++) {
+                const rad = clockNodes[i].angle * Math.PI / 180;
+                clockNodes[i].x = centerX + Math.sin(rad) * currentDisplayRx;
+                clockNodes[i].y = centerY - Math.cos(rad) * currentDisplayRy;
+            }
+
             drawBackground();
             const now = Date.now();
             const pulse = now * 0.002;
             
-            // 繪製調色盤 (僅沙盒模式且閒置時可用，挑戰模式也可見但不互動物件)
-            ctx.fillStyle = 'rgba(255, 255, 255, 0.01)'; ctx.fillRect(width - iconSize * 2.5, 0, iconSize * 2.5, height);
+            // 調色盤
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.01)'; ctx.fillRect(width - iconSize * 3.5, 0, iconSize * 3.5, height);
             paletteIcons.forEach(p => {
                 const isActive = (!isChallengeMode && p.typeConfig.id === activeSoundType.id);
                 const a = isActive ? 1.0 : 0.4;
@@ -568,92 +583,88 @@
                 }
             });
 
-            // 繪製 12 個節點
+            // 12 節點陣列
             const renderType = isChallengeMode ? targetType : activeSoundType;
             if (renderType) {
                 for (let i = 0; i < 12; i++) {
                     const node = clockNodes[i];
-                    let alpha = 0.2; // 預設暗態
+                    let alpha = 0.2; 
                     let scale = 0.8;
                     
                     if (isChallengeMode) {
                         if (challengeState === 'listening') {
-                            alpha = 0.1; // 聆聽時全滅
+                            alpha = 0.05; // 聆聽時幾乎全滅
                         } else if (challengeState === 'guessing') {
-                            alpha = 0.3;
+                            alpha = 0.35;
                             if (hoveredNodeIndex === i) {
-                                alpha = 0.8; 
-                                scale = 1.1 + 0.15 * Math.sin(now / 150); // 呼吸縮放
+                                alpha = 0.9; scale = 1.15 + 0.1 * Math.sin(now / 150); 
                             }
                         } else if (challengeState === 'feedback' || challengeState === 'replaying') {
                             if (i === targetAngleIndex) {
-                                alpha = 1.0; scale = 1.3; // 正確答案高亮
-                                // 畫連線
+                                alpha = 1.0; scale = 1.3; 
                                 ctx.beginPath(); 
                                 const beamGrad = ctx.createLinearGradient(centerX, centerY, node.x, node.y);
-                                beamGrad.addColorStop(0, 'rgba(100, 220, 255, 0.1)'); beamGrad.addColorStop(1, `rgba(${renderType.color}, 0.8)`);
+                                beamGrad.addColorStop(0, 'rgba(100, 220, 255, 0.1)'); beamGrad.addColorStop(1, `rgba(${renderType.color}, 0.9)`);
                                 ctx.strokeStyle = beamGrad; ctx.lineWidth = 3; ctx.moveTo(centerX, centerY); ctx.lineTo(node.x, node.y); ctx.stroke();
                             } else if (i === guessIndex) {
-                                alpha = 0.8; scale = 1.0; // 玩家猜錯的點
-                                ctx.fillStyle = "#ff4444"; ctx.shadowBlur = 10; ctx.shadowColor = "#ff0000";
+                                alpha = 0.8; scale = 1.0; 
+                                ctx.fillStyle = "#ff4444"; ctx.shadowBlur = 15; ctx.shadowColor = "#ff0000";
                                 ctx.beginPath(); ctx.arc(node.x, node.y, 8, 0, Math.PI*2); ctx.fill(); ctx.shadowBlur = 0;
+                            } else {
+                                alpha = 0.15;
                             }
                         }
                     } else {
-                        // 沙盒模式
+                        // 沙盒
                         if (hoveredNodeIndex === i) {
-                            alpha = 0.8; scale = 1.1 + 0.15 * Math.sin(now / 150);
+                            alpha = 0.9; scale = 1.15 + 0.1 * Math.sin(now / 150);
                         } else {
                             alpha = 0.4;
                         }
                     }
-                    
                     drawGeometry(ctx, renderType.id, node.x, node.y, iconSize, renderType.color, alpha, pulse, scale);
                 }
             }
-
             requestAnimationFrame(animate);
         }
 
         window.addEventListener('pointermove', (e) => {
             const pt = { x: e.clientX, y: e.clientY };
             hoveredNodeIndex = -1;
-            // 僅在允許互動的狀態下偵測 Hover
             if ((!isChallengeMode) || (isChallengeMode && challengeState === 'guessing')) {
                 for (let i = 0; i < 12; i++) {
                     const node = clockNodes[i];
-                    if (Math.sqrt((pt.x-node.x)**2 + (pt.y-node.y)**2) < 40 * uiScale) {
+                    if (Math.sqrt((pt.x-node.x)**2 + (pt.y-node.y)**2) < 45 * uiScale) {
                         hoveredNodeIndex = i; break;
                     }
                 }
             }
         });
 
-        window.addEventListener('pointerdown', async (e) => {
+        window.addEventListener('pointerdown', (e) => {
             if (e.target.tagName === 'BUTTON') return;
-            await initAudio(); 
+            initAudio(); // 確保互動時解鎖音訊
             const pt = { x: e.clientX, y: e.clientY };
             
-            // 1. 檢查是否點擊右側調色盤 (僅沙盒模式切換音色)
+            // 調色盤
             if (!isChallengeMode) {
                 for (let i = 0; i < paletteIcons.length; i++) {
-                    const p = paletteIcons[i];
-                    if (Math.sqrt((pt.x-p.x)**2 + (pt.y-p.y)**2) < 40 * uiScale) {
-                        activeSoundType = p.typeConfig; return;
+                    if (Math.sqrt((pt.x-paletteIcons[i].x)**2 + (pt.y-paletteIcons[i].y)**2) < 45 * uiScale) {
+                        activeSoundType = paletteIcons[i].typeConfig; return;
                     }
                 }
             }
 
-            // 2. 挑戰模式點擊螢幕推進流程
+            // 挑戰流程推進
             if (isChallengeMode) { 
                 if (challengeState === 'preparing') { startChallengePlay(); return; } 
             }
 
-            // 3. 檢查是否點擊 12 個方位節點
+            // 節點點擊
             let clickedNodeIndex = -1;
             for (let i = 0; i < 12; i++) {
                 const node = clockNodes[i];
-                if (Math.sqrt((pt.x-node.x)**2 + (pt.y-node.y)**2) < 45 * uiScale) {
+                if (Math.sqrt((pt.x-node.x)**2 + (pt.y-node.y)**2) < 50 * uiScale) {
                     clickedNodeIndex = i; break;
                 }
             }
@@ -662,7 +673,6 @@
                 if (isChallengeMode && challengeState === 'guessing') {
                     submitGuess(clickedNodeIndex);
                 } else if (!isChallengeMode) {
-                    // 沙盒模式：點擊播放該方位聲音
                     if (!audioPlayer) audioPlayer = new DirectionalPlayer();
                     audioPlayer.play(activeSoundType, ANGLES_DEG[clickedNodeIndex], currentRadius, 2.0);
                 }
