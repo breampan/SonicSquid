@@ -12,6 +12,7 @@
             user-select: none; -webkit-user-select: none;
         }
         canvas { display: block; touch-action: none; }
+
         #scene-controls {
             position: absolute; bottom: 25px; left: 50%;
             transform: translateX(-50%); display: flex; gap: 8px;
@@ -20,6 +21,7 @@
             border: 1px solid rgba(100, 220, 255, 0.1); z-index: 100;
             max-width: 90vw; overflow-x: auto;
         }
+
         .scene-btn {
             background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.1);
             color: rgba(200, 240, 255, 0.6); padding: 7px 14px; border-radius: 20px;
@@ -27,6 +29,7 @@
             white-space: nowrap;
         }
         .scene-btn.active { background: rgba(100, 220, 255, 0.2); border-color: #64dcff; color: #fff; }
+
         #challenge-ui {
             position: absolute; top: 25px; left: 20px;
             display: flex; flex-direction: column; gap: 10px; z-index: 200;
@@ -39,7 +42,16 @@
         }
         .action-btn:hover { background: #64dcff; color: #01050a; }
         .score-panel { color: #64dcff; font-size: 18px; font-weight: bold; display: none; text-shadow: 0 0 10px rgba(100,220,255,0.5); }
-        #replay-ui { position: absolute; top: 25px; right: 20px; z-index: 200; display: none; }
+        
+        /* 修正：複習按鈕改為動態定位 */
+        #replay-ui { 
+            position: absolute; 
+            z-index: 200; 
+            display: none; 
+            pointer-events: auto;
+            transform: translate(-50%, 0);
+        }
+
         #challenge-hint {
             position: absolute; top: 45%; left: 50%;
             transform: translate(-50%, -50%); color: #64dcff;
@@ -256,7 +268,7 @@
                 this.smoothedX = x; this.smoothedY = y;
                 this.prevDist = 0; this.velocity = 0; this.dopplerFactor = 1.0; 
                 this.isDragging = false; this.isFading = false; this.isChallengeObject = false; 
-                this.isMuted = false; // 關鍵修正：鎖定狀態
+                this.isMuted = false;
                 this.life = 1.0; this.pulse = 0; this.trajectory = [];
                 this.source = null; this.modulator = null; this.modGain = null; 
                 this.lfo = null; this.filter = null; this.pinnaFilter = null; this.airFilter = null; 
@@ -298,7 +310,7 @@
                 if (!this.gain || !audioCtx) return;
                 const now = audioCtx.currentTime;
                 this.isFading = true;
-                this.isMuted = true; // 鎖定音量，不讓 updatePanner 重設
+                this.isMuted = true;
                 const fadeDuration = 8 + Math.random() * 4; 
                 const timeConstant = fadeDuration / 3.5; 
                 this.gain.gain.cancelScheduledValues(now);
@@ -308,7 +320,7 @@
             }
 
             updatePanner(isInit = false) {
-                if (!this.panner || !audioCtx || this.isMuted) return; // 鎖定中不執行音量運算
+                if (!this.panner || !audioCtx || this.isMuted) return; 
                 const now = audioCtx.currentTime;
                 const posX = (this.smoothedX / width) * 6 - 3;
                 const posZ = ((this.smoothedY - listenerPlaneY) / (height * 0.4 || 1)) * 4.5;
@@ -342,7 +354,7 @@
 
             muteChallenge() { 
                 if (this.gain) { 
-                    this.isMuted = true; // 關鍵修正
+                    this.isMuted = true;
                     this.gain.gain.cancelScheduledValues(audioCtx.currentTime); 
                     this.gain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.8); 
                 } 
@@ -373,6 +385,7 @@
                     } else { 
                         challengeState = 'feedback'; 
                         this.muteChallenge(); 
+                        positionReplayButton(); // 複習結束重新定位
                         document.getElementById('replay-ui').style.display = "block";
                         document.getElementById('challenge-hint').innerHTML = "複習結束<br><span style='font-size:16px; color:#fff'>點擊畫面繼續下一題</span>"; 
                     }
@@ -380,6 +393,25 @@
                 if (this.isFading) { this.life -= this.fadeSpeed; if(this.life <= 0) this.cleanup(); }
             }
             draw(ctx) { if (this.isChallengeObject && (challengeState === 'listening' || challengeState === 'waiting_for_guess')) return; if (this.life <= 0) return; drawGeometry(ctx, this.type, this.x, this.y, 28 * uiScale, this.rgb, Math.max(0, this.life) * (this.isDragging ? 1.0 : 0.65), this.pulse); }
+        }
+
+        // --- 修正：複習按鈕動態定位邏輯 ---
+        function positionReplayButton() {
+            if (!challengeTarget) return;
+            const ui = document.getElementById('replay-ui');
+            const offset = 65 * uiScale;
+            ui.style.left = challengeTarget.x + "px";
+            
+            // 判斷按鈕要在目標上方還是下方 (避免擋到中心點)
+            if (challengeTarget.y > centerY) {
+                // 如果目標在聽者下方，按鈕放在目標更下方
+                const targetPos = challengeTarget.y + offset;
+                ui.style.top = Math.min(height - 80, targetPos) + "px";
+            } else {
+                // 如果目標在聽者上方，按鈕放在目標更上方
+                const targetPos = challengeTarget.y - offset - 40;
+                ui.style.top = Math.max(80, targetPos) + "px";
+            }
         }
 
         window.toggleMode = () => {
@@ -437,6 +469,8 @@
             const dist = Math.sqrt((x - challengeTarget.x)**2 + (y - challengeTarget.y)**2);
             totalScore += Math.max(0, Math.round(100 * (1 - dist / (450 * uiScale))));
             document.getElementById('score-display').innerText = `積分: ${totalScore}`;
+            
+            positionReplayButton(); // 動態定位按鈕
             document.getElementById('replay-ui').style.display = "block";
             document.getElementById('challenge-hint').innerHTML = "方位座標已揭曉<br><span style='font-size:16px; color:#fff'>點擊畫面繼續下一題</span>";
             challengeTarget.life = 1.0;
