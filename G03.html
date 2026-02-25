@@ -102,12 +102,12 @@
 
     <script>
         /**
-         * 聽能定向訓練系統 - 12 方位定點版 (完全更新版)
-         * 整合內容：
-         * 1. 聲學校準：2.0s 統一時值、主觀響度等化。
-         * 2. 仿生視覺：劃蝽有機體模型 + 划水動畫。
-         * 3. 空間邏輯：12 方位陣列，挑戰模式固定視覺半徑。
-         * 4. 交互優化：中央重播按鈕、點擊背景前進、無雜音 crossfade。
+         * 聽能定向訓練系統 - 12 方位定點版
+         * 整合更新：
+         * 1. 圖示設計：劃蝽 (Boatman) 回歸簡潔幾何設計（菱形體+直槳腿），移除有機昆蟲特徵。
+         * 2. 參數等化：統一 2.0s 時值，並套用響度補償因子。
+         * 3. 視覺一致：挑戰模式圖示環保持視覺穩定，防止塌陷。
+         * 4. 交互：重播按鈕居中，點擊背景推進關卡。
          */
         const canvas = document.getElementById('appCanvas');
         const ctx = canvas.getContext('2d');
@@ -126,7 +126,7 @@
         let currentRound = 1;
         let totalScore = 0;
         const MAX_ROUNDS = 5;
-        const CONSTANT_DURATION = 2.0; // 統一發聲長度
+        const CONSTANT_DURATION = 2.0; // 統一發聲時值
 
         let targetAngleIndex = 0;
         let targetDistance = 1.0;
@@ -145,11 +145,12 @@
             forest: { main: '#44ffaa', bg: '#02150a', gridAlpha: 0.06, flow: 0.65, length: 2.2, decay: 4.0, lp: 3000, dry: 0.8, wet: 0.3 }
         };
 
+        // 套用響度歸一化因子 (Loudness Normalization Factors)
         const WAVE_TYPES = {
-            SINE: { id: 'sine', color: '100, 220, 255' },
-            TRIANGLE: { id: 'triangle', color: '255, 204, 170' },
-            NOISE: { id: 'noise', color: '160, 255, 170' },
-            BOATMAN: { id: 'boatman', color: '255, 85, 68' }
+            SINE: { id: 'sine', color: '100, 220, 255', norm: 1.35 },
+            TRIANGLE: { id: 'triangle', color: '255, 204, 170', norm: 1.0 },
+            NOISE: { id: 'noise', color: '160, 255, 170', norm: 0.65 },
+            BOATMAN: { id: 'boatman', color: '255, 85, 68', norm: 0.9 }
         };
 
         const ANGLES_DEG = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330];
@@ -188,10 +189,7 @@
                     }
                 };
                 const fadeIn = () => {
-                    if (this.audio.volume < 0.12) {
-                        this.audio.volume = Math.min(0.12, this.audio.volume + 0.01);
-                        this.fadeTimeout = setTimeout(fadeIn, 40);
-                    }
+                    if (this.audio.volume < 0.12) { this.audio.volume = Math.min(0.12, this.audio.volume + 0.01); this.fadeTimeout = setTimeout(fadeIn, 40); }
                 };
                 if (!this.audio.paused && this.audio.src) fadeOut();
                 else { this.audio.src = targetUrl; this.audio.play().then(() => { fadeIn(); }).catch(e => {}); }
@@ -263,7 +261,6 @@
         window.setScene = (scene) => { initAudio(); currentScene = scene; if (ambianceManager) ambianceManager.playScene(scene); applySceneAudio(scene); };
         window.setRadius = (r) => { initAudio(); currentRadius = r; document.querySelectorAll('#radius-controls .ctrl-btn').forEach(btn => { btn.classList.remove('active'); if(btn.innerText.includes(r.toString())) btn.classList.add('active'); }); };
 
-        // --- 核心播放器 (響度等化與時值統一版) ---
         class DirectionalPlayer {
             constructor() { this.source = null; this.modulator = null; this.lfo = null; this.gain = null; this.panner = null; }
             play(typeConfig, angleDeg, distance, duration = CONSTANT_DURATION) {
@@ -279,19 +276,11 @@
                 this.panner.positionZ.value = -Math.cos(rad) * distance * 2.5;
                 air.frequency.value = Math.max(400, 20000 - (distance * 3500));
                 pinna.gain.value = this.panner.positionZ.value < 0 ? 3.5 : -9.0; 
-                
-                const attackTime = 0.05; const releaseTime = 0.15;  
-                let targetVol = 0.45;
-                if (typeConfig.id === 'sine') targetVol = 0.42;
-                if (typeConfig.id === 'triangle') targetVol = 0.38;
-                if (typeConfig.id === 'noise') targetVol = 0.58; 
-                if (typeConfig.id === 'boatman') targetVol = 0.48;
-
                 this.gain.gain.setValueAtTime(0.0001, now);
-                this.gain.gain.exponentialRampToValueAtTime(targetVol, now + attackTime);
-                this.gain.gain.setValueAtTime(targetVol, now + duration - releaseTime);
+                let targetVol = 0.35 * (typeConfig.norm || 1.0); // 套用歸一化增益
+                this.gain.gain.exponentialRampToValueAtTime(targetVol, now + 0.05);
+                this.gain.gain.setValueAtTime(targetVol, now + duration - 0.15);
                 this.gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
-
                 if (typeConfig.id === 'sine' || typeConfig.id === 'triangle') {
                     this.source = audioCtx.createOscillator(); this.modulator = audioCtx.createOscillator(); this.modGain = audioCtx.createGain();
                     this.source.type = typeConfig.id; this.modulator.type = 'sine'; this.modulator.connect(this.modGain); this.modGain.connect(this.source.frequency);
@@ -391,7 +380,7 @@
             else if (diffIdx === 1) { roundScore = 15; feedbackText = "非常接近，只有一格偏差"; color = "#10dcff"; }
             else if (diffIdx === 2) { roundScore = 10; feedbackText = "方向大致正確，繼續保持"; color = "#ffaa44"; }
             else if (diffIdx === 3) { roundScore = 5; feedbackText = "略有偏離，注意前後差異"; color = "#ff7744"; }
-            else { roundScore = 0; feedbackText = "完全相反囉！可以點擊下方按鈕重播"; color = "#ff4444"; }
+            else { roundScore = 0; feedbackText = "完全相反囉！可以再聽一次校對"; color = "#ff4444"; }
             totalScore += roundScore; document.getElementById('score-display').innerText = `總積分: ${totalScore}`;
             const nextT = (currentRound >= MAX_ROUNDS) ? "點擊背景查看總結算" : "點擊背景進入下一題";
             document.getElementById('center-hint').innerHTML = `<div class="feedback-score" style="color:${color}">+${roundScore} 分</div>${feedbackText}<br><span style='font-size:16px; color:#fff'>${nextT}</span>`;
@@ -410,7 +399,6 @@
 
         function drawBackground() {
             const cfg = SCENE_CONFIG[currentScene];
-            const t = Date.now() * 0.001 * cfg.flow;
             const bgGrad = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, height * 1.1);
             bgGrad.addColorStop(0, cfg.bg); bgGrad.addColorStop(1, '#000000');
             ctx.fillStyle = bgGrad; ctx.fillRect(0, 0, width, height);
@@ -425,6 +413,7 @@
             ctx.beginPath(); ctx.arc(centerX, centerY - 8, 10, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); ctx.restore();
         }
 
+        // --- 核心繪圖邏輯：劃蝽 (Boatman) 回歸簡潔幾何版 ---
         function drawGeometry(ctx, type, x, y, baseSize, rgbStr, alpha = 1.0, pulse = 0, extraScale = 1.0) {
             let currentSize = baseSize * extraScale; if (type === 'sine' || type === 'triangle') currentSize *= 1.25; 
             ctx.save(); ctx.translate(x, y); 
@@ -446,17 +435,27 @@
                 ctx.beginPath(); for (let i = 0; i < 12; i++) {
                     let r = currentSize * (0.8 + Math.random() * 0.3); let a = (i / 12) * Math.PI * 2; ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
                 } ctx.closePath(); ctx.fill(); ctx.stroke();
-            } else if (type === 'boatman') {
+            } 
+            // 【劃蝽：完全回歸指定的幾何簡潔版】
+            else if (type === 'boatman') {
+                ctx.rotate(pulse * 0.2); 
                 const s = currentSize * 0.9;
-                const breath = Math.sin(pulse * 2.5) * 0.08 + 1.0; 
-                const paddle = Math.sin(pulse * 4); 
-                ctx.save(); ctx.scale(breath, breath);
-                ctx.beginPath(); ctx.ellipse(0, -s * 0.6, s * 0.4, s * 0.3, 0, 0, Math.PI * 2); ctx.ellipse(0, s * 0.1, s * 0.55, s * 0.85, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-                ctx.fillStyle = "rgba(255, 255, 255, 0.8)"; ctx.beginPath(); ctx.arc(-s * 0.2, -s * 0.65, s * 0.1, 0, Math.PI * 2); ctx.arc(s * 0.2, -s * 0.65, s * 0.1, 0, Math.PI * 2); ctx.fill();
-                ctx.lineWidth = 2.5 * uiScale; ctx.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.9})`;
-                ctx.beginPath(); ctx.moveTo(-s * 0.3, 0); ctx.lineTo(-s * 1.5, s * 0.6 + paddle * s * 0.4); ctx.stroke();
-                ctx.beginPath(); ctx.moveTo(s * 0.3, 0); ctx.lineTo(s * 1.5, s * 0.6 + paddle * s * 0.4); ctx.stroke();
-                ctx.restore();
+                // 1. 菱形主體
+                ctx.beginPath();
+                ctx.moveTo(0, -s);
+                ctx.lineTo(s * 0.6, 0);
+                ctx.lineTo(0, s);
+                ctx.lineTo(-s * 0.6, 0);
+                ctx.closePath();
+                ctx.fill();
+                ctx.stroke();
+                // 2. 直線槳腿
+                ctx.beginPath();
+                ctx.moveTo(s * 0.4, -s * 0.3);
+                ctx.lineTo(s * 1.2, -s * 0.8);
+                ctx.moveTo(-s * 0.4, -s * 0.3);
+                ctx.lineTo(-s * 1.2, -s * 0.8);
+                ctx.stroke();
             }
             ctx.restore();
         }
