@@ -91,10 +91,10 @@
         </div>
         <!-- 場景控制 -->
         <div class="control-group" id="scene-controls">
-            <button class="ctrl-btn active" onclick="setScene('bathroom')">清澈水域</button>
-            <button class="ctrl-btn" onclick="setScene('station')">深海大教堂</button>
-            <button class="ctrl-btn" onclick="setScene('cave')">幽暗海洞</button>
-            <button class="ctrl-btn" onclick="setScene('forest')">水下森林</button>
+            <button class="ctrl-btn active" onclick="setScene('bathroom')">一般室內</button>
+            <button class="ctrl-btn" onclick="setScene('station')">車站大廳</button>
+            <button class="ctrl-btn" onclick="setScene('cave')">天然山洞</button>
+            <button class="ctrl-btn" onclick="setScene('forest')">戶外森林</button>
         </div>
     </div>
 
@@ -242,8 +242,8 @@
         }
         
         function getSceneName(key) {
-            if(key==='bathroom') return '清澈'; if(key==='station') return '大教堂';
-            if(key==='cave') return '海洞'; return '森林';
+            if(key==='bathroom') return '一般室內'; if(key==='station') return '車站大廳';
+            if(key==='cave') return '天然山洞'; return '戶外森林';
         }
 
         function getRadiusFactor(dist) {
@@ -405,7 +405,7 @@
             hoveredNodeIndex = -1;
 
             if (isChallengeMode) {
-                btn.innerText = "退出挑戰模式";
+                btn.innerText = "退出 12 方位定點挑戰";
                 scoreDisplay.style.display = "block";
                 roundDisplay.style.display = "block";
                 radiusControls.style.display = "none"; 
