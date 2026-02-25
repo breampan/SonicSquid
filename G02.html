@@ -107,7 +107,6 @@
         let paletteIcons = [];
         const activePointers = new Map();
         
-        // --- 視覺強化：水下升騰氣泡系統 ---
         let waterBubbles = [];
 
         function initAudio() {
@@ -157,9 +156,9 @@
                     x: Math.random() * width,
                     y: Math.random() * height,
                     r: 0.5 + Math.random() * 2,
-                    vy: -0.3 - Math.random() * 0.8, // 向上升騰
-                    oscAmp: 0.2 + Math.random() * 0.5, // 左右晃動幅度
-                    oscFreq: 0.01 + Math.random() * 0.02, // 晃動頻率
+                    vy: -0.3 - Math.random() * 0.8,
+                    oscAmp: 0.2 + Math.random() * 0.5,
+                    oscFreq: 0.01 + Math.random() * 0.02,
                     a: 0.1 + Math.random() * 0.5,
                     offset: Math.random() * Math.PI * 2
                 });
@@ -169,13 +168,10 @@
         function drawUnderwaterBackground() {
             const cfg = SCENE_CONFIG[currentScene];
             const t = Date.now() * 0.001;
-            
-            // 基礎背景
             const bgGrad = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, height * 1.1);
             bgGrad.addColorStop(0, cfg.bg); bgGrad.addColorStop(1, '#000000');
             ctx.fillStyle = bgGrad; ctx.fillRect(0, 0, width, height);
 
-            // 水下光折射 (輕微閃爍)
             ctx.save();
             ctx.globalCompositeOperation = 'screen';
             for (let i = 0; i < 2; i++) {
@@ -188,26 +184,16 @@
             }
             ctx.restore();
 
-            // 升騰氣泡繪製
             ctx.fillStyle = cfg.main;
             waterBubbles.forEach(p => {
                 p.y += p.vy;
-                p.x += Math.sin(p.y * p.oscFreq + p.offset) * p.oscAmp; // 氣泡擺動
-                
-                if (p.y < -20) {
-                    p.y = height + 20;
-                    p.x = Math.random() * width;
-                }
-                
+                p.x += Math.sin(p.y * p.oscFreq + p.offset) * p.oscAmp;
+                if (p.y < -20) { p.y = height + 20; p.x = Math.random() * width; }
                 ctx.globalAlpha = p.a;
-                ctx.beginPath();
-                // 實心微粒混合發光感
-                ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-                ctx.fill();
+                ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
             });
             ctx.globalAlpha = 1.0;
 
-            // 原有線條與 UI 裝飾
             ctx.lineWidth = 1; ctx.strokeStyle = cfg.main + '22';
             for (let i = 0; i < 24; i++) {
                 const a = (i / 24) * Math.PI * 2 + Math.sin(t * 0.1) * 0.05;
@@ -222,7 +208,6 @@
             ctx.beginPath(); ctx.arc(centerX, centerY - 12, 13, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); ctx.restore();
         }
 
-        // --- 原始精緻圖示繪製邏輯 (完全保留) ---
         function drawGeometry(ctx, type, x, y, baseSize, rgbStr, alpha = 1.0, pulse = 0) {
             const isBehind = y > listenerPlaneY; const dist = Math.sqrt((x - centerX)**2 + (y - centerY)**2);
             const depthFactor = Math.max(0.2, 1.35 - (dist / (height * 0.75 || 1)));
@@ -265,6 +250,7 @@
                 this.source = null; this.modulator = null; this.modGain = null; 
                 this.lfo = null; this.filter = null; this.pinnaFilter = null; this.airFilter = null; 
                 this.gain = null; this.sidechainGain = null; this.panner = null;
+                this.fadeSpeed = 0.02; // 預設視覺消失速度
             }
             play() {
                 if (!audioCtx) return; const now = audioCtx.currentTime;
@@ -297,17 +283,27 @@
                 this.source.start(now + 0.05);
             }
 
-            // Tab 切換修正
+            // --- 修正：隨機 8-12 秒 Fade out ---
             startFadeOut() {
                 if (!this.gain || !audioCtx) return;
                 const now = audioCtx.currentTime;
                 this.isFading = true;
+                
+                // 隨機產生 8 到 12 秒的消失時間
+                const fadeDuration = 8 + Math.random() * 4; 
+                // 將時間常數設為總長的 1/3 到 1/4，以達到自然的平滑曲線
+                const timeConstant = fadeDuration / 3.5; 
+                
                 this.gain.gain.cancelScheduledValues(now);
-                this.gain.gain.setTargetAtTime(0, now, 0.4); 
-                if (this.source) this.source.stop(now + 2.0);
+                this.gain.gain.setTargetAtTime(0, now, timeConstant); 
+                
+                // 視覺消失速度同步 (1秒60幀)
+                this.fadeSpeed = 1.0 / (fadeDuration * 60);
+
+                if (this.source) this.source.stop(now + fadeDuration + 1.0);
                 setTimeout(() => {
                     activeObjects = activeObjects.filter(o => o !== this);
-                }, 2000);
+                }, (fadeDuration + 1.0) * 1000);
             }
 
             updatePanner(isInit = false) {
@@ -316,32 +312,31 @@
                 const posX = (this.smoothedX / width) * 6 - 3;
                 const distZNorm = (this.smoothedY - listenerPlaneY) / (height * 0.4 || 1);
                 const posZ = distZNorm * 4.5;
-                const tc = 0.22; 
                 const rawDist = Math.sqrt(posX*posX + posZ*posZ);
                 if (!isInit) {
                     this.velocity = (rawDist - this.prevDist) * 75; 
-                    const speedOfSound = 100; this.dopplerFactor = Math.max(0.4, Math.min(2.5, speedOfSound / (speedOfSound + this.velocity)));
+                    this.dopplerFactor = Math.max(0.4, Math.min(2.5, 100 / (100 + this.velocity)));
                 }
                 this.prevDist = rawDist;
-                this.panner.positionX.setTargetAtTime(posX, now, tc);
-                this.panner.positionZ.setTargetAtTime(posZ, now, tc);
+                this.panner.positionX.setTargetAtTime(posX, now, 0.22);
+                this.panner.positionZ.setTargetAtTime(posZ, now, 0.22);
                 this.airFilter.frequency.setTargetAtTime(Math.max(400, 20000 - (Math.abs(distZNorm) * 18500)), now, 0.12);
-                this.pinnaFilter.gain.setTargetAtTime(posZ < 0 ? 3.5 : -9.0, now, tc);
+                this.pinnaFilter.gain.setTargetAtTime(posZ < 0 ? 3.5 : -9.0, now, 0.22);
                 let volBase = 0.5 * this.life;
                 if (this.isDragging) volBase *= (1.0 + (1.0 - Math.min(1.0, Math.abs(distZNorm))) * 1.2);
                 else if (this.isChallengeObject) volBase *= (1.0 + (1.0 - Math.min(1.0, Math.abs(distZNorm))) * 0.9);
                 if (this.type === 'noise' && this.filter) {
                     this.filter.Q.setTargetAtTime(Math.max(1.5, 25 - (Math.abs(distZNorm) * 23.5)), now, 0.2);
                     this.filter.frequency.setTargetAtTime((4200 - (Math.abs(distZNorm) * 2500)) * this.dopplerFactor, now, 0.1);
-                    this.gain.gain.setTargetAtTime(volBase, now, tc);
+                    this.gain.gain.setTargetAtTime(volBase, now, 0.22);
                 } else if ((this.type === 'sine' || this.type === 'triangle') && this.modulator) {
                     const xRatio = (this.smoothedX / width);
-                    this.modulator.frequency.setTargetAtTime(0.5 + xRatio * (this.type === 'sine' ? 80 : 150), now, tc);
-                    this.modGain.gain.setTargetAtTime(Math.max(0, (1 - Math.abs(distZNorm)) * (this.type === 'sine' ? 120 : 250) * this.life), now, tc);
+                    this.modulator.frequency.setTargetAtTime(0.5 + xRatio * (this.type === 'sine' ? 80 : 150), now, 0.22);
+                    this.modGain.gain.setTargetAtTime(Math.max(0, (1 - Math.abs(distZNorm)) * (this.type === 'sine' ? 120 : 250) * this.life), now, 0.22);
                     const h = Math.max(0, Math.min(1, 1 - (this.smoothedY / height)));
-                    this.source.frequency.setTargetAtTime((180 + h * 450) * this.dopplerFactor, now, tc);
-                    this.gain.gain.setTargetAtTime(volBase * 1.15, now, tc);
-                } else { this.gain.gain.setTargetAtTime(volBase, now, tc); }
+                    this.source.frequency.setTargetAtTime((180 + h * 450) * this.dopplerFactor, now, 0.22);
+                    this.gain.gain.setTargetAtTime(volBase * 1.15, now, 0.22);
+                } else { this.gain.gain.setTargetAtTime(volBase, now, 0.22); }
             }
 
             muteChallenge() { 
@@ -367,12 +362,11 @@
                         this.updatePanner(); replayIndex += 2; 
                     } else { challengeState = 'feedback'; this.muteChallenge(); document.getElementById('feedback-controls').style.display = "flex"; document.getElementById('challenge-hint').innerHTML = "複習結束"; }
                 }
-                if (this.isFading) { this.life -= 0.02; }
+                if (this.isFading) { this.life -= this.fadeSpeed; }
             }
             draw(ctx) { if (this.isChallengeObject && (challengeState === 'listening' || challengeState === 'waiting_for_guess')) return; if (this.life <= 0) return; drawGeometry(ctx, this.type, this.x, this.y, 28 * uiScale, this.rgb, Math.max(0, this.life) * (this.isDragging ? 1.0 : 0.65), this.pulse); }
         }
 
-        // --- 其餘原始邏輯 (介面控制、挑戰模式等) ---
         window.toggleMode = () => {
             initAudio(); isChallengeMode = !isChallengeMode;
             const btn = document.getElementById('mode-toggle'); const scoreDisplay = document.getElementById('score-display');
@@ -412,6 +406,19 @@
                 }
             };
             challengeTarget.play();
+        }
+
+        window.startReplay = () => { if (!challengeTarget) return; challengeState = 'replaying'; replayIndex = 0; document.getElementById('feedback-controls').style.display = "none"; document.getElementById('challenge-hint').innerHTML = "正在進行軌跡複習..."; challengeTarget.life = 1.0; challengeTarget.play(); };
+        window.prepareNextChallenge = () => { challengeState = 'preparing'; if (challengeTarget) challengeTarget.cleanup(); challengeTarget = null; document.getElementById('feedback-controls').style.display = "none"; const hint = document.getElementById('challenge-hint'); hint.innerHTML = "準備下一題...<br><span style='font-size:18px; color:#fff'>點擊畫面繼續</span>"; hint.style.opacity = 1; };
+
+        function handleChallengeGuess(x, y) {
+            if (challengeState !== 'waiting_for_guess') return;
+            challengeState = 'feedback'; lastGuessX = x; lastGuessY = y;
+            const dist = Math.sqrt((x - challengeTarget.x)**2 + (y - challengeTarget.y)**2);
+            totalScore += Math.max(0, Math.round(100 * (1 - dist / (450 * uiScale))));
+            document.getElementById('score-display').innerText = `積分: ${totalScore}`;
+            document.getElementById('feedback-controls').style.display = "flex";
+            document.getElementById('challenge-hint').innerHTML = "方位座標已揭曉"; challengeTarget.life = 1.0;
         }
 
         function setScene(scene) { initAudio(); currentScene = scene; document.querySelectorAll('.scene-btn').forEach(btn => btn.classList.remove('active')); if(event) event.target.classList.add('active'); applySceneAudio(scene); }
@@ -482,18 +489,6 @@
             const obj = activePointers.get(e.pointerId); if (obj) { obj.isDragging = false; obj.startFadeOut(); activePointers.delete(e.pointerId); } 
         });
         window.addEventListener('resize', initLayout); initLayout(); animate();
-
-        function handleChallengeGuess(x, y) {
-            if (challengeState !== 'waiting_for_guess') return;
-            challengeState = 'feedback'; lastGuessX = x; lastGuessY = y;
-            const dist = Math.sqrt((x - challengeTarget.x)**2 + (y - challengeTarget.y)**2);
-            totalScore += Math.max(0, Math.round(100 * (1 - dist / (450 * uiScale))));
-            document.getElementById('score-display').innerText = `積分: ${totalScore}`;
-            document.getElementById('feedback-controls').style.display = "flex";
-            document.getElementById('challenge-hint').innerHTML = "方位座標已揭曉"; challengeTarget.life = 1.0;
-        }
-        function startReplay() { /* ... */ }
-        function prepareNextChallenge() { /* ... */ }
     </script>
 </body>
 </html>
