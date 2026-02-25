@@ -12,6 +12,7 @@
             user-select: none; -webkit-user-select: none;
         }
         canvas { display: block; touch-action: none; }
+
         #scene-controls {
             position: absolute; bottom: 25px; left: 50%;
             transform: translateX(-50%); display: flex; gap: 8px;
@@ -20,6 +21,7 @@
             border: 1px solid rgba(100, 220, 255, 0.1); z-index: 100;
             max-width: 90vw; overflow-x: auto;
         }
+
         .scene-btn {
             background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.1);
             color: rgba(200, 240, 255, 0.6); padding: 7px 14px; border-radius: 20px;
@@ -27,6 +29,7 @@
             white-space: nowrap;
         }
         .scene-btn.active { background: rgba(100, 220, 255, 0.2); border-color: #64dcff; color: #fff; }
+
         #challenge-ui {
             position: absolute; top: 25px; left: 20px;
             display: flex; flex-direction: column; gap: 10px; z-index: 200;
@@ -39,7 +42,9 @@
         }
         .action-btn:hover { background: #64dcff; color: #01050a; }
         .score-panel { color: #64dcff; font-size: 18px; font-weight: bold; display: none; text-shadow: 0 0 10px rgba(100,220,255,0.5); }
-        .challenge-actions { display: flex; gap: 10px; }
+        
+        #replay-ui { position: absolute; top: 25px; right: 20px; z-index: 200; display: none; }
+
         #challenge-hint {
             position: absolute; top: 45%; left: 50%;
             transform: translate(-50%, -50%); color: #64dcff;
@@ -55,10 +60,10 @@
     <div id="challenge-ui">
         <button id="mode-toggle" class="action-btn" onclick="toggleMode()">開啟聽能定向挑戰</button>
         <div id="score-display" class="score-panel">積分: 0</div>
-        <div id="feedback-controls" class="challenge-actions" style="display:none">
-            <button class="action-btn" onclick="startReplay()">觀看軌跡複習</button>
-            <button class="action-btn" onclick="prepareNextChallenge()">下一題挑戰</button>
-        </div>
+    </div>
+
+    <div id="replay-ui">
+        <button class="action-btn" onclick="startReplay()">觀看軌跡複習</button>
     </div>
 
     <div id="challenge-hint">請閉上眼聆聽...</div>
@@ -106,7 +111,6 @@
         let activeObjects = []; 
         let paletteIcons = [];
         const activePointers = new Map();
-        
         let waterBubbles = [];
 
         function initAudio() {
@@ -149,18 +153,39 @@
             masterWet.gain.setTargetAtTime(cfg.wet, now, 0.15);
         }
 
+        // --- 核心改進：音訊全面管理 ---
+        function stopAllSounds(fast = true) {
+            const now = audioCtx ? audioCtx.currentTime : 0;
+            const fadeTime = fast ? 0.3 : 1.5;
+
+            // 清理沙盒物件
+            activeObjects.forEach(obj => {
+                if (obj.gain) {
+                    obj.gain.gain.cancelScheduledValues(now);
+                    obj.gain.gain.setTargetAtTime(0, now, fadeTime/3);
+                }
+                obj.cleanup();
+            });
+            activeObjects = [];
+
+            // 清理挑戰目標
+            if (challengeTarget) {
+                if (challengeTarget.gain) {
+                    challengeTarget.gain.gain.cancelScheduledValues(now);
+                    challengeTarget.gain.gain.setTargetAtTime(0, now, fadeTime/3);
+                }
+                challengeTarget.cleanup();
+            }
+        }
+
         function initBackgroundVisuals() {
             waterBubbles = [];
             for(let i=0; i<80; i++) {
                 waterBubbles.push({
-                    x: Math.random() * width,
-                    y: Math.random() * height,
-                    r: 0.5 + Math.random() * 2,
-                    vy: -0.3 - Math.random() * 0.8,
-                    oscAmp: 0.2 + Math.random() * 0.5,
-                    oscFreq: 0.01 + Math.random() * 0.02,
-                    a: 0.1 + Math.random() * 0.5,
-                    offset: Math.random() * Math.PI * 2
+                    x: Math.random() * width, y: Math.random() * height,
+                    r: 0.5 + Math.random() * 2, vy: -0.3 - Math.random() * 0.8,
+                    oscAmp: 0.2 + Math.random() * 0.5, oscFreq: 0.01 + Math.random() * 0.02,
+                    a: 0.1 + Math.random() * 0.5, offset: Math.random() * Math.PI * 2
                 });
             }
         }
@@ -186,11 +211,9 @@
 
             ctx.fillStyle = cfg.main;
             waterBubbles.forEach(p => {
-                p.y += p.vy;
-                p.x += Math.sin(p.y * p.oscFreq + p.offset) * p.oscAmp;
+                p.y += p.vy; p.x += Math.sin(p.y * p.oscFreq + p.offset) * p.oscAmp;
                 if (p.y < -20) { p.y = height + 20; p.x = Math.random() * width; }
-                ctx.globalAlpha = p.a;
-                ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
+                ctx.globalAlpha = p.a; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
             });
             ctx.globalAlpha = 1.0;
 
@@ -250,11 +273,11 @@
                 this.source = null; this.modulator = null; this.modGain = null; 
                 this.lfo = null; this.filter = null; this.pinnaFilter = null; this.airFilter = null; 
                 this.gain = null; this.sidechainGain = null; this.panner = null;
-                this.fadeSpeed = 0.02; // 預設視覺消失速度
+                this.fadeSpeed = 0.02;
             }
             play() {
                 if (!audioCtx) return; const now = audioCtx.currentTime;
-                if (this.source) return; 
+                if (this.source) this.cleanup(); // 確保不重疊
                 this.gain = audioCtx.createGain(); this.sidechainGain = audioCtx.createGain(); this.panner = audioCtx.createPanner();
                 this.airFilter = audioCtx.createBiquadFilter(); this.airFilter.type = 'lowpass';
                 this.pinnaFilter = audioCtx.createBiquadFilter(); this.pinnaFilter.type = 'highshelf';
@@ -283,60 +306,49 @@
                 this.source.start(now + 0.05);
             }
 
-            // --- 修正：隨機 8-12 秒 Fade out ---
             startFadeOut() {
                 if (!this.gain || !audioCtx) return;
                 const now = audioCtx.currentTime;
                 this.isFading = true;
-                
-                // 隨機產生 8 到 12 秒的消失時間
                 const fadeDuration = 8 + Math.random() * 4; 
-                // 將時間常數設為總長的 1/3 到 1/4，以達到自然的平滑曲線
                 const timeConstant = fadeDuration / 3.5; 
-                
                 this.gain.gain.cancelScheduledValues(now);
                 this.gain.gain.setTargetAtTime(0, now, timeConstant); 
-                
-                // 視覺消失速度同步 (1秒60幀)
                 this.fadeSpeed = 1.0 / (fadeDuration * 60);
-
                 if (this.source) this.source.stop(now + fadeDuration + 1.0);
-                setTimeout(() => {
-                    activeObjects = activeObjects.filter(o => o !== this);
-                }, (fadeDuration + 1.0) * 1000);
             }
 
             updatePanner(isInit = false) {
                 if (!this.panner || !audioCtx) return;
                 const now = audioCtx.currentTime;
                 const posX = (this.smoothedX / width) * 6 - 3;
-                const distZNorm = (this.smoothedY - listenerPlaneY) / (height * 0.4 || 1);
-                const posZ = distZNorm * 4.5;
+                const posZ = ((this.smoothedY - listenerPlaneY) / (height * 0.4 || 1)) * 4.5;
+                const tc = 0.22; 
                 const rawDist = Math.sqrt(posX*posX + posZ*posZ);
                 if (!isInit) {
                     this.velocity = (rawDist - this.prevDist) * 75; 
                     this.dopplerFactor = Math.max(0.4, Math.min(2.5, 100 / (100 + this.velocity)));
                 }
                 this.prevDist = rawDist;
-                this.panner.positionX.setTargetAtTime(posX, now, 0.22);
-                this.panner.positionZ.setTargetAtTime(posZ, now, 0.22);
-                this.airFilter.frequency.setTargetAtTime(Math.max(400, 20000 - (Math.abs(distZNorm) * 18500)), now, 0.12);
-                this.pinnaFilter.gain.setTargetAtTime(posZ < 0 ? 3.5 : -9.0, now, 0.22);
+                this.panner.positionX.setTargetAtTime(posX, now, tc);
+                this.panner.positionZ.setTargetAtTime(posZ, now, tc);
+                this.airFilter.frequency.setTargetAtTime(Math.max(400, 20000 - (Math.abs(posZ/4.5) * 18500)), now, 0.12);
+                this.pinnaFilter.gain.setTargetAtTime(posZ < 0 ? 3.5 : -9.0, now, tc);
                 let volBase = 0.5 * this.life;
-                if (this.isDragging) volBase *= (1.0 + (1.0 - Math.min(1.0, Math.abs(distZNorm))) * 1.2);
-                else if (this.isChallengeObject) volBase *= (1.0 + (1.0 - Math.min(1.0, Math.abs(distZNorm))) * 0.9);
+                if (this.isDragging) volBase *= (1.0 + (1.0 - Math.min(1.0, Math.abs(posZ/4.5))) * 1.2);
+                else if (this.isChallengeObject) volBase *= (1.0 + (1.0 - Math.min(1.0, Math.abs(posZ/4.5))) * 0.9);
                 if (this.type === 'noise' && this.filter) {
-                    this.filter.Q.setTargetAtTime(Math.max(1.5, 25 - (Math.abs(distZNorm) * 23.5)), now, 0.2);
-                    this.filter.frequency.setTargetAtTime((4200 - (Math.abs(distZNorm) * 2500)) * this.dopplerFactor, now, 0.1);
-                    this.gain.gain.setTargetAtTime(volBase, now, 0.22);
+                    this.filter.Q.setTargetAtTime(Math.max(1.5, 25 - (Math.abs(posZ/4.5) * 23.5)), now, 0.2);
+                    this.filter.frequency.setTargetAtTime((4200 - (Math.abs(posZ/4.5) * 2500)) * this.dopplerFactor, now, 0.1);
+                    this.gain.gain.setTargetAtTime(volBase, now, tc);
                 } else if ((this.type === 'sine' || this.type === 'triangle') && this.modulator) {
                     const xRatio = (this.smoothedX / width);
-                    this.modulator.frequency.setTargetAtTime(0.5 + xRatio * (this.type === 'sine' ? 80 : 150), now, 0.22);
-                    this.modGain.gain.setTargetAtTime(Math.max(0, (1 - Math.abs(distZNorm)) * (this.type === 'sine' ? 120 : 250) * this.life), now, 0.22);
+                    this.modulator.frequency.setTargetAtTime(0.5 + xRatio * (this.type === 'sine' ? 80 : 150), now, tc);
+                    this.modGain.gain.setTargetAtTime(Math.max(0, (1 - Math.abs(posZ/4.5)) * (this.type === 'sine' ? 120 : 250) * this.life), now, tc);
                     const h = Math.max(0, Math.min(1, 1 - (this.smoothedY / height)));
-                    this.source.frequency.setTargetAtTime((180 + h * 450) * this.dopplerFactor, now, 0.22);
-                    this.gain.gain.setTargetAtTime(volBase * 1.15, now, 0.22);
-                } else { this.gain.gain.setTargetAtTime(volBase, now, 0.22); }
+                    this.source.frequency.setTargetAtTime((180 + h * 450) * this.dopplerFactor, now, tc);
+                    this.gain.gain.setTargetAtTime(volBase * 1.15, now, tc);
+                } else { this.gain.gain.setTargetAtTime(volBase, now, tc); }
             }
 
             muteChallenge() { 
@@ -345,7 +357,16 @@
                     this.gain.gain.setTargetAtTime(0, audioCtx.currentTime, 1.2); 
                 } 
             }
-            cleanup() { if(this.source) { try { this.source.stop(); } catch(e) {} } this.source = null; }
+            cleanup() { 
+                if(this.source) { 
+                    try { 
+                        this.source.stop(audioCtx.currentTime + 0.1); 
+                        if(this.modulator) this.modulator.stop(audioCtx.currentTime + 0.1);
+                        if(this.lfo) this.lfo.stop(audioCtx.currentTime + 0.1);
+                    } catch(e) {} 
+                } 
+                this.source = null; 
+            }
             update() {
                 this.pulse += 0.08;
                 if (this.isDragging) { 
@@ -360,68 +381,102 @@
                         const p = this.trajectory[replayIndex]; this.x = p.x; this.y = p.y;
                         this.smoothedX += (this.x - this.smoothedX) * 0.22; this.smoothedY += (this.y - this.smoothedY) * 0.22;
                         this.updatePanner(); replayIndex += 2; 
-                    } else { challengeState = 'feedback'; this.muteChallenge(); document.getElementById('feedback-controls').style.display = "flex"; document.getElementById('challenge-hint').innerHTML = "複習結束"; }
+                    } else { 
+                        challengeState = 'feedback'; 
+                        this.muteChallenge(); 
+                        document.getElementById('replay-ui').style.display = "block";
+                        document.getElementById('challenge-hint').innerHTML = "複習結束<br><span style='font-size:16px; color:#fff'>點擊畫面繼續下一題</span>"; 
+                    }
                 }
-                if (this.isFading) { this.life -= this.fadeSpeed; }
+                if (this.isFading) { this.life -= this.fadeSpeed; if(this.life <= 0) this.cleanup(); }
             }
             draw(ctx) { if (this.isChallengeObject && (challengeState === 'listening' || challengeState === 'waiting_for_guess')) return; if (this.life <= 0) return; drawGeometry(ctx, this.type, this.x, this.y, 28 * uiScale, this.rgb, Math.max(0, this.life) * (this.isDragging ? 1.0 : 0.65), this.pulse); }
         }
 
         window.toggleMode = () => {
-            initAudio(); isChallengeMode = !isChallengeMode;
-            const btn = document.getElementById('mode-toggle'); const scoreDisplay = document.getElementById('score-display');
+            initAudio(); 
+            stopAllSounds(); // 切換模式時清理所有聲音
+            isChallengeMode = !isChallengeMode;
+            const btn = document.getElementById('mode-toggle');
+            const scoreDisplay = document.getElementById('score-display');
             const hint = document.getElementById('challenge-hint');
-            activeObjects.forEach(obj => obj.cleanup()); activeObjects = [];
-            if (challengeTarget) { challengeTarget.cleanup(); challengeTarget = null; }
-            document.getElementById('feedback-controls').style.display = "none";
-            totalScore = 0; scoreDisplay.innerText = `積分: ${totalScore}`;
+            document.getElementById('replay-ui').style.display = "none";
+
             if (isChallengeMode) {
-                btn.innerText = "退出訓練模式"; scoreDisplay.style.display = "block"; challengeState = 'preparing';
-                hint.innerHTML = "準備好了嗎？<br><span style='font-size:16px; color:#fff'>點擊畫面任何地方開始聽能定向挑戰</span>"; hint.style.opacity = 1;
+                btn.innerText = "退出訓練模式"; scoreDisplay.style.display = "block";
+                challengeState = 'preparing';
+                hint.innerHTML = "準備好了嗎？<br><span style='font-size:16px; color:#fff'>點擊畫面任何地方開始聽能定向挑戰</span>";
+                hint.style.opacity = 1;
             } else {
-                btn.innerText = "開啟聽能定向挑戰"; scoreDisplay.style.display = "none"; hint.style.opacity = 0; challengeState = 'idle';
+                btn.innerText = "開啟聽能定向挑戰"; scoreDisplay.style.display = "none";
+                hint.style.opacity = 0; challengeState = 'idle';
             }
         };
 
         function startNewChallenge() {
-            challengeState = 'listening'; document.getElementById('feedback-controls').style.display = "none";
-            const hint = document.getElementById('challenge-hint'); hint.innerHTML = "請閉上眼聆聽聲音移動..."; hint.style.opacity = 1;
+            stopAllSounds(); // 挑戰前確保乾淨
+            challengeState = 'listening';
+            document.getElementById('replay-ui').style.display = "none";
+            const hint = document.getElementById('challenge-hint');
+            hint.innerHTML = "請閉上眼聆聽聲音移動...";
+            hint.style.opacity = 1;
             const randomType = Object.values(WAVE_TYPES)[Math.floor(Math.random() * 4)];
             const safeX = width * 0.25; const safeY = height * 0.25;
-            const rx = safeX + Math.random() * (width - safeX * 2); const ry = safeY + Math.random() * (height - safeY * 2);
+            const rx = safeX + Math.random() * (width - safeX * 2);
+            const ry = safeY + Math.random() * (height - safeY * 2);
             challengeTarget = new DraggableSound(randomType, rx, ry);
-            challengeTarget.isChallengeObject = true; challengeTarget.trajectory = []; 
-            challengeTarget.moveDuration = 3500 + Math.random() * 2000; challengeTarget.startTime = Date.now();
-            const angleStart = Math.random() * Math.PI * 2; const angleSpeed = (Math.random() - 0.5) * 0.05;
+            challengeTarget.isChallengeObject = true;
+            challengeTarget.trajectory = []; 
+            challengeTarget.moveDuration = 3500 + Math.random() * 2000;
+            challengeTarget.startTime = Date.now();
+            const angleStart = Math.random() * Math.PI * 2;
+            const angleSpeed = (Math.random() - 0.5) * 0.05;
             const radius = 80 + Math.random() * 100 * uiScale;
             challengeTarget.updateCustomPath = function() {
                 const elapsed = Date.now() - this.startTime;
                 if (elapsed < this.moveDuration) {
                     this.x = rx + Math.cos(angleStart + angleSpeed * elapsed * 0.05) * radius;
                     this.y = ry + Math.sin(angleStart + angleSpeed * elapsed * 0.05) * radius;
-                    this.trajectory.push({x: this.x, y: this.y}); this.updatePanner();
+                    this.trajectory.push({x: this.x, y: this.y});
+                    this.updatePanner();
                 } else {
-                    challengeState = 'waiting_for_guess'; this.muteChallenge();
+                    challengeState = 'waiting_for_guess';
+                    this.muteChallenge();
                     hint.innerHTML = "聲音已停止<br><span style='font-size:16px; color:#fff'>請點擊聲源最後消失的位置</span>";
                 }
             };
             challengeTarget.play();
         }
 
-        window.startReplay = () => { if (!challengeTarget) return; challengeState = 'replaying'; replayIndex = 0; document.getElementById('feedback-controls').style.display = "none"; document.getElementById('challenge-hint').innerHTML = "正在進行軌跡複習..."; challengeTarget.life = 1.0; challengeTarget.play(); };
-        window.prepareNextChallenge = () => { challengeState = 'preparing'; if (challengeTarget) challengeTarget.cleanup(); challengeTarget = null; document.getElementById('feedback-controls').style.display = "none"; const hint = document.getElementById('challenge-hint'); hint.innerHTML = "準備下一題...<br><span style='font-size:18px; color:#fff'>點擊畫面繼續</span>"; hint.style.opacity = 1; };
+        window.startReplay = () => {
+            if (!challengeTarget) return;
+            stopAllSounds(true); // 重播前快速淡出之前的聲音
+            challengeState = 'replaying';
+            replayIndex = 0;
+            document.getElementById('replay-ui').style.display = "none";
+            document.getElementById('challenge-hint').innerHTML = "正在進行軌跡複習...";
+            challengeTarget.life = 1.0;
+            challengeTarget.play(); 
+        };
 
         function handleChallengeGuess(x, y) {
-            if (challengeState !== 'waiting_for_guess') return;
             challengeState = 'feedback'; lastGuessX = x; lastGuessY = y;
             const dist = Math.sqrt((x - challengeTarget.x)**2 + (y - challengeTarget.y)**2);
             totalScore += Math.max(0, Math.round(100 * (1 - dist / (450 * uiScale))));
             document.getElementById('score-display').innerText = `積分: ${totalScore}`;
-            document.getElementById('feedback-controls').style.display = "flex";
-            document.getElementById('challenge-hint').innerHTML = "方位座標已揭曉"; challengeTarget.life = 1.0;
+            document.getElementById('replay-ui').style.display = "block";
+            document.getElementById('challenge-hint').innerHTML = "方位座標已揭曉<br><span style='font-size:16px; color:#fff'>點擊畫面繼續下一題</span>";
+            challengeTarget.life = 1.0;
         }
 
-        function setScene(scene) { initAudio(); currentScene = scene; document.querySelectorAll('.scene-btn').forEach(btn => btn.classList.remove('active')); if(event) event.target.classList.add('active'); applySceneAudio(scene); }
+        function setScene(scene) { 
+            initAudio(); 
+            stopAllSounds(); // 切換場景時清理現有聲音
+            currentScene = scene; 
+            document.querySelectorAll('.scene-btn').forEach(btn => btn.classList.remove('active')); 
+            if(event) event.target.classList.add('active'); 
+            applySceneAudio(scene); 
+        }
 
         function initLayout() {
             dpr = window.devicePixelRatio || 1; width = window.innerWidth; height = window.innerHeight;
@@ -464,11 +519,24 @@
         window.addEventListener('pointerdown', (e) => {
             if (e.target.closest('button') || e.target.closest('#scene-controls')) return;
             initAudio(); const pt = { x: e.clientX, y: e.clientY };
+            
+            // 挑戰模式交互流優化
             if (isChallengeMode) { 
                 if (challengeState === 'preparing') { startNewChallenge(); return; } 
                 if (challengeState === 'waiting_for_guess') { handleChallengeGuess(pt.x, pt.y); return; } 
+                if (challengeState === 'feedback') {
+                    // 點擊畫面進入下一題準備狀態
+                    challengeState = 'preparing';
+                    if (challengeTarget) challengeTarget.cleanup();
+                    challengeTarget = null;
+                    document.getElementById('replay-ui').style.display = "none";
+                    document.getElementById('challenge-hint').innerHTML = "準備下一題...<br><span style='font-size:18px; color:#fff'>點擊畫面開始</span>";
+                    document.getElementById('challenge-hint').style.opacity = 1;
+                    return;
+                }
                 return; 
             }
+            
             let paletteHit = false;
             paletteIcons.forEach(p => { 
                 if (Math.sqrt((pt.x-p.x)**2 + (pt.y-p.y)**2) < 50 * uiScale) { 
