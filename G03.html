@@ -110,8 +110,8 @@
         /**
          * 聽能定向訓練系統 - 12 方位定點挑戰版 (De-click 修正版)
          * 1. 消除 Click 雜音：導入 Max/MSP [line~] 式的快速 ADSR 封包，解決播放/停止切換瞬間的波形斷裂。
-         * 2. 動態半徑適配：陣列平滑縮放至對應同心圓 (0.5m~3m)。
-         * 3. 程式碼淨化：清理舊版殘留邏輯，確保引擎穩定運行。
+         * 2. 音場無縫切換：在 applySceneAudio 中實作安全交叉淡化(Crossfade)，切換場景不再爆音。
+         * 3. 動態半徑適配：陣列平滑縮放至對應同心圓 (0.5m~3m)。
          */
         const canvas = document.getElementById('appCanvas');
         const ctx = canvas.getContext('2d');
@@ -175,6 +175,11 @@
                 
                 convolver = audioCtx.createConvolver();
                 masterDry = audioCtx.createGain(); masterWet = audioCtx.createGain();
+                
+                // 設定初始 Gain 避免一開始爆音
+                masterDry.gain.value = 0.0001; 
+                masterWet.gain.value = 0.0001;
+                
                 masterDry.connect(masterCompressor); convolver.connect(masterWet); masterWet.connect(masterCompressor);
                 
                 const bufferSize = audioCtx.sampleRate * 2; 
@@ -188,6 +193,7 @@
             }
         }
 
+        // 【新增】：具有 Ramp 包絡的場景切換，避免 Convolution Buffer 替換產生 Click 雜音
         function applySceneAudio(scene) {
             if (!audioCtx) return;
             const cfg = SCENE_CONFIG[scene];
@@ -195,6 +201,7 @@
             const frameCount = Math.floor(sampleRate * cfg.length);
             const buffer = audioCtx.createBuffer(2, frameCount, sampleRate);
             const filterAlpha = Math.min(1.0, (2 * Math.PI * cfg.lp) / sampleRate);
+            
             for (let ch = 0; ch < 2; ch++) {
                 const data = buffer.getChannelData(ch);
                 let lastVal = 0;
@@ -204,11 +211,30 @@
                     data[i] = lastVal * Math.exp(-cfg.decay * t) * 0.45;
                 }
             }
-            convolver.buffer = buffer;
-            const now = audioCtx.currentTime;
-            masterDry.gain.setTargetAtTime(cfg.dry, now, 0.15);
-            masterWet.gain.setTargetAtTime(cfg.wet, now, 0.15);
             
+            const now = audioCtx.currentTime;
+            
+            // 1. 快速淡出 Wet (殘響) 以避免換 Buffer 時發生 Click
+            masterWet.gain.cancelScheduledValues(now);
+            masterWet.gain.setValueAtTime(masterWet.gain.value, now);
+            masterWet.gain.linearRampToValueAtTime(0.0001, now + 0.05);
+
+            // 2. 平滑過渡 Dry (直接音)
+            masterDry.gain.cancelScheduledValues(now);
+            masterDry.gain.setValueAtTime(masterDry.gain.value, now);
+            masterDry.gain.linearRampToValueAtTime(cfg.dry, now + 0.1);
+
+            // 3. 在 Wet 完全淡出後(約60ms)安全替換 Buffer，然後將 Wet 淡入目標值
+            setTimeout(() => {
+                if (!convolver) return;
+                convolver.buffer = buffer;
+                const resumeTime = audioCtx.currentTime;
+                masterWet.gain.cancelScheduledValues(resumeTime);
+                masterWet.gain.setValueAtTime(0.0001, resumeTime);
+                masterWet.gain.linearRampToValueAtTime(cfg.wet, resumeTime + 0.1);
+            }, 60);
+            
+            // 更新 UI 按鈕
             document.querySelectorAll('#scene-controls .ctrl-btn').forEach(btn => {
                 btn.classList.remove('active');
                 if(btn.innerText.includes(getSceneName(scene))) btn.classList.add('active');
@@ -335,7 +361,8 @@
                 try {
                     // 使用 setTargetAtTime 進行安全接軌，防呆防爆音
                     this.gain.gain.cancelScheduledValues(now);
-                    this.gain.gain.setTargetAtTime(0.0001, now, fastFade / 3);
+                    this.gain.gain.setValueAtTime(this.gain.gain.value, now);
+                    this.gain.gain.linearRampToValueAtTime(0.0001, now + fastFade);
                 } catch (e) {}
 
                 // 保存局部變數讓 setTimeout 執行清理

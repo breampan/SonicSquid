@@ -78,13 +78,6 @@
     <canvas id="appCanvas"></canvas>
 
     <script>
-        /**
-         * 聽能定向訓練系統 - 行動裝置優化版
-         * 修復：
-         * 1. 消除延遲：移除 async 事件攔截，實現「即點即拖」。
-         * 2. 手機音訊：同步執行音訊恢復邏輯，確保 iOS 穩定出聲。
-         * 3. 訓練邏輯：優化綠色物件衰減，建立更好的空間殘影。
-         */
         const canvas = document.getElementById('appCanvas');
         const ctx = canvas.getContext('2d');
         let width, height, dpr, centerX, centerY;
@@ -121,7 +114,6 @@
         const activePointers = new Map();
         let fishParticles = [];
 
-        // 核心啟動：同步恢復 AudioContext
         function initAudio() {
             if (!audioCtx) {
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -139,7 +131,7 @@
                 for (let i = 0; i < bufferSize; i++) output[i] = Math.random() * 2 - 1;
                 applySceneAudio(currentScene);
             }
-            if (audioCtx.state === 'suspended') {
+            if (audioCtx.state !== 'running') {
                 audioCtx.resume();
             }
         }
@@ -167,7 +159,7 @@
         }
 
         window.toggleMode = () => {
-            initAudio(); // 同步觸發啟動
+            initAudio(); 
             isChallengeMode = !isChallengeMode;
             const btn = document.getElementById('mode-toggle');
             const scoreDisplay = document.getElementById('score-display');
@@ -269,7 +261,7 @@
             ctx.beginPath(); ctx.arc(centerX, centerY - 12, 13, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); ctx.restore();
         }
 
-        function drawGeometry(ctx, type, x, y, baseSize, rgbStr, alpha = 1.0, pulse = 0, modFreq = 0, modDepth = 0) {
+        function drawGeometry(ctx, type, x, y, baseSize, rgbStr, alpha = 1.0, pulse = 0) {
             const isBehind = y > listenerPlaneY; const dist = Math.sqrt((x - centerX)**2 + (y - centerY)**2);
             const depthFactor = Math.max(0.2, 1.35 - (dist / (height * 0.75 || 1)));
             let currentSize = baseSize * depthFactor; if (type === 'sine' || type === 'triangle') currentSize *= 1.25; 
@@ -282,11 +274,11 @@
             if (type === 'sine') {
                 const r = Math.max(0.1, currentSize * 0.65 + Math.sin(pulse * 0.5) * 5);
                 ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-                ctx.rotate(pulse * (0.3 + (modFreq / 100))); ctx.beginPath(); ctx.arc(currentSize * 0.4, 0, Math.max(0.1, currentSize * 0.35), 0, Math.PI * 2); ctx.stroke();
+                ctx.rotate(pulse * 0.3); ctx.beginPath(); ctx.arc(currentSize * 0.4, 0, Math.max(0.1, currentSize * 0.35), 0, Math.PI * 2); ctx.stroke();
             } else if (type === 'triangle') {
                 ctx.save(); ctx.rotate(pulse * 0.15); const s1 = currentSize * 1.2;
                 ctx.beginPath(); ctx.moveTo(0, -s1); ctx.lineTo(s1, s1 * 0.8); ctx.lineTo(-s1, s1 * 0.8); ctx.closePath(); ctx.stroke(); ctx.restore();
-                ctx.save(); ctx.rotate(-pulse * (0.2 + modFreq/200)); const s2 = s1 * 0.6;
+                ctx.save(); ctx.rotate(-pulse * 0.2); const s2 = s1 * 0.6;
                 ctx.beginPath(); ctx.moveTo(0, s2); ctx.lineTo(s2, -s2 * 0.8); ctx.lineTo(-s2, -s2 * 0.8); ctx.closePath(); if(!isBehind) ctx.fill(); ctx.stroke(); ctx.restore();
             } else if (type === 'noise') {
                 ctx.beginPath(); for (let i = 0; i < 12; i++) {
@@ -311,7 +303,6 @@
                 this.source = null; this.modulator = null; this.modGain = null; 
                 this.lfo = null; this.filter = null; this.pinnaFilter = null; this.airFilter = null; 
                 this.gain = null; this.sidechainGain = null; this.panner = null;
-                this.currentModFreq = 0; this.currentModDepth = 0;
             }
             play() {
                 if (!audioCtx) return; const now = audioCtx.currentTime;
@@ -381,7 +372,6 @@
             muteChallenge() { 
                 if (this.gain) { 
                     this.gain.gain.cancelScheduledValues(audioCtx.currentTime); 
-                    // 修正：增加消失殘影時間至 1.2s，幫助建立定向印象
                     this.gain.gain.setTargetAtTime(0, audioCtx.currentTime, 1.2); 
                 } 
             }
@@ -456,27 +446,37 @@
                     ctx.beginPath(); ctx.arc(lastGuessX, lastGuessY, 6, 0, Math.PI*2); ctx.fill(); ctx.shadowBlur = 0;
                 }
             }
-            fishParticles.forEach((p, i) => { p.update(isChallengeMode ? challengeTarget : activeObjects.find(o => o.isDragging)); p.draw(ctx); if (p.life <= 0) fishParticles.splice(i, 1); });
             requestAnimationFrame(animate);
         }
 
-        // --- 修復核心：移除非同步阻斷，實現即時反應 ---
         window.addEventListener('pointerdown', (e) => {
-            if (e.target.tagName === 'BUTTON') return;
+            if (e.target.closest('button') || e.target.closest('#scene-controls')) return;
             
-            // 立即同步啟動音訊 (iPhone 解鎖關鍵)
             initAudio(); 
             
             const pt = { x: e.clientX, y: e.clientY };
             
-            // 挑戰模式邏輯
             if (isChallengeMode) { 
                 if (challengeState === 'preparing') { startNewChallenge(); return; } 
                 if (challengeState === 'waiting_for_guess') { handleChallengeGuess(pt.x, pt.y); return; } 
                 return; 
             }
             
-            // 檢查是否點擊現有物件
+            let paletteHit = false;
+            paletteIcons.forEach(p => { 
+                if (Math.sqrt((pt.x-p.x)**2 + (pt.y-p.y)**2) < 50 * uiScale) { 
+                    const n = new DraggableSound(p.typeConfig, pt.x, pt.y); 
+                    n.isDragging = true; 
+                    n.pointerId = e.pointerId; 
+                    activeObjects.push(n); 
+                    activePointers.set(e.pointerId, n); 
+                    n.play(); 
+                    paletteHit = true;
+                } 
+            });
+
+            if (paletteHit) return;
+
             for (let i = activeObjects.length - 1; i >= 0; i--) { 
                 const obj = activeObjects[i]; 
                 if (Math.sqrt((pt.x-obj.x)**2 + (pt.y-obj.y)**2) < 55 * uiScale) { 
@@ -487,19 +487,7 @@
                     return; 
                 } 
             }
-            
-            // 檢查是否從調色盤新增 (即時生成)
-            paletteIcons.forEach(p => { 
-                if (Math.sqrt((pt.x-p.x)**2 + (pt.y-p.y)**2) < 45 * uiScale) { 
-                    const n = new DraggableSound(p.typeConfig, pt.x, pt.y); 
-                    n.isDragging = true; 
-                    n.pointerId = e.pointerId; 
-                    activeObjects.push(n); 
-                    activePointers.set(e.pointerId, n); 
-                    n.play(); 
-                } 
-            });
-        });
+        }, { passive: false });
 
         window.addEventListener('pointermove', (e) => { const obj = activePointers.get(e.pointerId); if (obj) { obj.x = e.clientX; obj.y = e.clientY; } });
         window.addEventListener('pointerup', (e) => { const obj = activePointers.get(e.pointerId); if (obj) { obj.isDragging = false; obj.isFading = true; activePointers.delete(e.pointerId); } });
