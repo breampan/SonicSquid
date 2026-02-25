@@ -36,11 +36,15 @@
             position: absolute; top: 25px; left: 20px;
             display: flex; flex-direction: column; gap: 10px; z-index: 200;
         }
+        .mode-selector {
+            display: flex; flex-direction: column; gap: 8px;
+        }
         .action-btn {
             background: rgba(100, 220, 255, 0.15); border: 1px solid #64dcff;
             color: #64dcff; padding: 12px 22px; border-radius: 30px;
             cursor: pointer; font-weight: bold; font-size: 14px; letter-spacing: 1px;
             transition: all 0.3s; box-shadow: 0 0 15px rgba(100, 220, 255, 0.1);
+            text-align: center;
         }
         .action-btn:hover { background: #64dcff; color: #01050a; }
         .score-panel { color: #64dcff; font-size: 18px; font-weight: bold; display: none; text-shadow: 0 0 10px rgba(100,220,255,0.5); }
@@ -68,7 +72,12 @@
 <body>
 
     <div id="challenge-ui">
-        <button id="mode-toggle" class="action-btn" onclick="toggleMode()">開啟 12 方位定點挑戰</button>
+        <div id="mode-selection" class="mode-selector">
+            <button class="action-btn" onclick="toggleMode(4)">開啟 4 方位挑戰</button>
+            <button class="action-btn" onclick="toggleMode(8)">開啟 8 方位挑戰</button>
+            <button class="action-btn" onclick="toggleMode(12)">開啟 12 方位挑戰</button>
+        </div>
+        <button id="exit-btn" class="action-btn" style="display:none" onclick="toggleMode()">退出訓練模式</button>
         <div id="round-display" class="round-panel">回合: 1 / 5</div>
         <div id="score-display" class="score-panel">總積分: 0</div>
     </div>
@@ -76,14 +85,12 @@
     <div id="center-hint">請閉上眼聆聽...</div>
 
     <div id="controls-container">
-        <!-- 半徑控制 (沙盒模式專用) -->
         <div class="control-group" id="radius-controls">
             <button class="ctrl-btn" onclick="setRadius(0.5)">0.5m</button>
             <button class="ctrl-btn active" onclick="setRadius(1.0)">1.0m</button>
             <button class="ctrl-btn" onclick="setRadius(2.0)">2.0m</button>
             <button class="ctrl-btn" onclick="setRadius(3.0)">3.0m</button>
         </div>
-        <!-- 場景控制 -->
         <div class="control-group" id="scene-controls">
             <button class="ctrl-btn active" onclick="setScene('bathroom')">一般室內</button>
             <button class="ctrl-btn" onclick="setScene('station')">車站大廳</button>
@@ -102,11 +109,10 @@
 
     <script>
         /**
-         * 聽能定向訓練系統 - 12 方位定點版 (完全同步修正版)
-         * 整合：
-         * 1. 挑戰距離視覺化：在 Reveal 階段，方位環會縮放到該題目的真實距離 (0.5-3m)。
-         * 2. 圖示回歸幾何：劃蝽回歸幾何菱形，但具備與 Sine/Triangle 一致的呼吸律動感。
-         * 3. 聲學等化：2.0s 統一時值，主觀響度對齊。
+         * 聽能定向訓練系統 - 12 方位定點版 (多模式與距離視覺化同步版)
+         * 1. 挑戰分級：支援 4, 8, 12 方位模式選擇。
+         * 2. 距離同步：猜測階段方位環即會顯示真實發聲距離 scale。
+         * 3. 聲學等化：2.0s 統一時值，主觀響度補償因子。
          */
         const canvas = document.getElementById('appCanvas');
         const ctx = canvas.getContext('2d');
@@ -121,7 +127,8 @@
         let currentRadius = 1.0;
         let currentVisualFactor = 0.5;
         let isChallengeMode = false;
-        let challengeState = 'idle'; 
+        let challengeSteps = 12; // 預設 12 方位
+        let challengeState = 'idle'; // idle, listening, guessing, feedback, replaying, finished
         let currentRound = 1;
         let totalScore = 0;
         const MAX_ROUNDS = 5;
@@ -151,7 +158,8 @@
             BOATMAN: { id: 'boatman', color: '255, 85, 68', norm: 0.95 }
         };
 
-        const ANGLES_DEG = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330];
+        // 12 方位基礎角度 (0-330)
+        const BASE_ANGLES = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330];
         let clockNodes = [];
         let hoveredNodeIndex = -1;
         let activeSoundType = WAVE_TYPES.SINE;
@@ -319,25 +327,43 @@
             }
         }
 
-        window.toggleMode = () => {
+        window.toggleMode = (steps = 0) => {
             initAudio(); if (audioPlayer) audioPlayer.stop();
-            isChallengeMode = !isChallengeMode;
-            const btn = document.getElementById('mode-toggle');
+            const selectionUI = document.getElementById('mode-selection');
+            const exitBtn = document.getElementById('exit-btn');
             const scoreDisplay = document.getElementById('score-display');
             const roundDisplay = document.getElementById('round-display');
             const hint = document.getElementById('center-hint');
             const radiusControls = document.getElementById('radius-controls');
             const endModal = document.getElementById('end-modal');
-            endModal.style.display = "none"; hoveredNodeIndex = -1;
-            if (isChallengeMode) {
-                btn.innerText = "退出訓練模式"; scoreDisplay.style.display = "block"; roundDisplay.style.display = "block";
-                radiusControls.style.display = "none"; totalScore = 0; currentRound = 1;
+
+            if (steps > 0) {
+                // 進入特定挑戰模式
+                isChallengeMode = true;
+                challengeSteps = steps;
+                selectionUI.style.display = "none";
+                exitBtn.style.display = "block";
+                scoreDisplay.style.display = "block";
+                roundDisplay.style.display = "block";
+                radiusControls.style.display = "none";
+                totalScore = 0; currentRound = 1;
                 scoreDisplay.innerText = `總積分: 0`; roundDisplay.innerText = `回合: 1 / 5`;
-                challengeState = 'preparing'; hint.innerHTML = "準備好了嗎？<br><span style='font-size:16px; color:#fff'>點擊畫面任何地方開始測驗</span>"; hint.style.opacity = 1;
+                challengeState = 'preparing'; 
+                hint.innerHTML = `準備好了嗎？<br><span style='font-size:16px; color:#fff'>點擊畫面開始 ${steps} 方位挑戰</span>`;
+                hint.style.opacity = 1;
             } else {
-                btn.innerText = "開啟 12 方位定點挑戰"; scoreDisplay.style.display = "none"; roundDisplay.style.display = "none";
-                radiusControls.style.display = "flex"; hint.style.opacity = 0; challengeState = 'idle';
+                // 退出或初始狀態
+                isChallengeMode = false;
+                selectionUI.style.display = "flex";
+                exitBtn.style.display = "none";
+                scoreDisplay.style.display = "none";
+                roundDisplay.style.display = "none";
+                radiusControls.style.display = "flex";
+                hint.style.opacity = 0;
+                endModal.style.display = "none";
+                challengeState = 'idle';
             }
+            hoveredNodeIndex = -1;
         };
 
         window.nextRound = () => {
@@ -353,13 +379,18 @@
         function startChallengePlay() {
             challengeState = 'listening'; guessIndex = -1;
             const hint = document.getElementById('center-hint'); hint.innerHTML = "請閉上眼，專注聆聽..."; hint.style.opacity = 1;
-            targetAngleIndex = Math.floor(Math.random() * 12);
+            
+            // 根據模式選擇角度索引
+            const stepMultiplier = 12 / challengeSteps;
+            targetAngleIndex = Math.floor(Math.random() * challengeSteps) * stepMultiplier;
+            
             targetDistance = DISTANCES[Math.floor(Math.random() * DISTANCES.length)];
             targetType = Object.values(WAVE_TYPES)[Math.floor(Math.random() * 4)];
             targetScene = SCENE_KEYS[Math.floor(Math.random() * SCENE_KEYS.length)];
             setScene(targetScene);
             if (!audioPlayer) audioPlayer = new DirectionalPlayer();
-            audioPlayer.play(targetType, ANGLES_DEG[targetAngleIndex], targetDistance, CONSTANT_DURATION);
+            audioPlayer.play(targetType, BASE_ANGLES[targetAngleIndex], targetDistance, CONSTANT_DURATION);
+            
             setTimeout(() => {
                 if (challengeState !== 'listening') return; 
                 challengeState = 'guessing'; hint.innerHTML = "聲音來自哪個方位？<br><span style='font-size:16px; color:#fff'>請點擊對應的圖示</span>";
@@ -368,7 +399,7 @@
 
         window.replayCurrent = () => {
             if (!audioPlayer) audioPlayer = new DirectionalPlayer();
-            audioPlayer.play(targetType, ANGLES_DEG[targetAngleIndex], targetDistance, CONSTANT_DURATION);
+            audioPlayer.play(targetType, BASE_ANGLES[targetAngleIndex], targetDistance, CONSTANT_DURATION);
             if (challengeState === 'feedback') {
                 challengeState = 'replaying';
                 setTimeout(() => { if(challengeState === 'replaying') challengeState = 'feedback'; }, CONSTANT_DURATION * 1000 + 100);
@@ -396,7 +427,7 @@
             ctx.scale(dpr, dpr); centerX = width / 2; listenerPlaneY = height * 0.48; centerY = listenerPlaneY;
             uiScale = Math.min(1.0, width / 1000) + 0.2; iconSize = Math.max(16, Math.min(28, width * 0.05));
             displayRadiusX = Math.min(width * 0.4, height * 0.38); displayRadiusY = displayRadiusX * 0.75; 
-            clockNodes = []; for(let i=0; i<12; i++) clockNodes.push({ angle: ANGLES_DEG[i], x: 0, y: 0 });
+            clockNodes = []; for(let i=0; i<12; i++) clockNodes.push({ angle: BASE_ANGLES[i], x: 0, y: 0 });
             const paletteX = width - iconSize * 2.0;
             paletteIcons = [{ typeConfig: WAVE_TYPES.SINE, x: paletteX, y: height * 0.20 }, { typeConfig: WAVE_TYPES.TRIANGLE, x: paletteX, y: height * 0.35 }, { typeConfig: WAVE_TYPES.NOISE, x: paletteX, y: height * 0.50 }, { typeConfig: WAVE_TYPES.BOATMAN, x: paletteX, y: height * 0.65 }];
         }
@@ -409,7 +440,7 @@
             ctx.fillStyle = bgGrad; ctx.fillRect(0, 0, width, height);
             ctx.lineWidth = 1; ctx.strokeStyle = cfg.main + '22';
             for (let i = 0; i < 12; i++) {
-                const rad = ANGLES_DEG[i] * Math.PI / 180;
+                const rad = BASE_ANGLES[i] * Math.PI / 180;
                 ctx.beginPath(); ctx.moveTo(centerX, centerY); ctx.lineTo(centerX + Math.sin(rad) * width, centerY - Math.cos(rad) * height); ctx.stroke();
             }
             for (let r = 1; r <= 4; r++) { ctx.beginPath(); ctx.ellipse(centerX, centerY, displayRadiusX * (r/4), displayRadiusY * (r/4), 0, 0, Math.PI * 2); ctx.stroke(); }
@@ -418,44 +449,27 @@
             ctx.beginPath(); ctx.arc(centerX, centerY - 8, 10, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); ctx.restore();
         }
 
-        // --- 核心繪圖邏輯：所有圖示同步呼吸律動 ---
         function drawGeometry(ctx, type, x, y, baseSize, rgbStr, alpha = 1.0, pulse = 0, extraScale = 1.0) {
-            // 呼吸律動係數，讓所有圖示同步伸縮
             const breath = 1.0 + Math.sin(pulse * 2.5) * 0.08;
             let currentSize = baseSize * extraScale * breath; 
             if (type === 'sine' || type === 'triangle') currentSize *= 1.25; 
-            
             ctx.save(); ctx.translate(x, y); 
             const glow = ctx.createRadialGradient(0, 0, 0, 0, 0, currentSize * 3);
             glow.addColorStop(0, `rgba(${rgbStr}, ${alpha * 0.5})`); glow.addColorStop(1, 'transparent');
             ctx.fillStyle = glow; ctx.beginPath(); ctx.arc(0, 0, currentSize * 3, 0, Math.PI * 2); ctx.fill();
             ctx.fillStyle = `rgba(${rgbStr}, ${alpha})`; ctx.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.9})`; ctx.lineWidth = 2.0;
-            
             if (type === 'sine') {
-                const r = Math.max(0.1, currentSize * 0.65);
-                ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-                ctx.rotate(pulse * 0.5); 
-                ctx.beginPath(); ctx.arc(currentSize * 0.4, 0, Math.max(0.1, currentSize * 0.35), 0, Math.PI * 2); ctx.stroke();
+                const r = Math.max(0.1, currentSize * 0.65); ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+                ctx.rotate(pulse * 0.5); ctx.beginPath(); ctx.arc(currentSize * 0.4, 0, Math.max(0.1, currentSize * 0.35), 0, Math.PI * 2); ctx.stroke();
             } else if (type === 'triangle') {
-                ctx.save(); ctx.rotate(pulse * 0.15); const s1 = currentSize * 1.2;
-                ctx.beginPath(); ctx.moveTo(0, -s1); ctx.lineTo(s1, s1 * 0.8); ctx.lineTo(-s1, s1 * 0.8); ctx.closePath(); ctx.stroke(); ctx.restore();
-                ctx.save(); ctx.rotate(-pulse * 0.4); const s2 = s1 * 0.6;
-                ctx.beginPath(); ctx.moveTo(0, s2); ctx.lineTo(s2, -s2 * 0.8); ctx.lineTo(-s2, -s2 * 0.8); ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.restore();
+                ctx.save(); ctx.rotate(pulse * 0.15); const s1 = currentSize * 1.2; ctx.beginPath(); ctx.moveTo(0, -s1); ctx.lineTo(s1, s1 * 0.8); ctx.lineTo(-s1, s1 * 0.8); ctx.closePath(); ctx.stroke(); ctx.restore();
+                ctx.save(); ctx.rotate(-pulse * 0.4); const s2 = s1 * 0.6; ctx.beginPath(); ctx.moveTo(0, s2); ctx.lineTo(s2, -s2 * 0.8); ctx.lineTo(-s2, -s2 * 0.8); ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.restore();
             } else if (type === 'noise') {
-                ctx.beginPath(); for (let i = 0; i < 12; i++) {
-                    let r = currentSize * (0.8 + Math.random() * 0.3); let a = (i / 12) * Math.PI * 2; ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
-                } ctx.closePath(); ctx.fill(); ctx.stroke();
+                ctx.beginPath(); for (let i = 0; i < 12; i++) { let r = currentSize * (0.8 + Math.random() * 0.3); let a = (i / 12) * Math.PI * 2; ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r); } ctx.closePath(); ctx.fill(); ctx.stroke();
             } else if (type === 'boatman') {
-                // 幾何劃蝽：菱形主體 + 律動槳腿
-                ctx.rotate(pulse * 0.2); 
-                const s = currentSize * 0.9;
-                const paddle = Math.sin(pulse * 4) * 0.3; // 槳腿划動量
+                ctx.rotate(pulse * 0.2); const s = currentSize * 0.9; const paddle = Math.sin(pulse * 4) * 0.3;
                 ctx.beginPath(); ctx.moveTo(0, -s); ctx.lineTo(s * 0.6, 0); ctx.lineTo(0, s); ctx.lineTo(-s * 0.6, 0); ctx.closePath(); ctx.fill(); ctx.stroke();
-                // 槳腿動態划動
-                ctx.beginPath();
-                ctx.moveTo(s * 0.4, -s * 0.3); ctx.lineTo(s * (1.2 + paddle), -s * 0.8);
-                ctx.moveTo(-s * 0.4, -s * 0.3); ctx.lineTo(-s * (1.2 + paddle), -s * 0.8);
-                ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(s * 0.4, -s * 0.3); ctx.lineTo(s * (1.2 + paddle), -s * 0.8); ctx.moveTo(-s * 0.4, -s * 0.3); ctx.lineTo(-s * (1.2 + paddle), -s * 0.8); ctx.stroke();
             }
             ctx.restore();
         }
@@ -475,13 +489,13 @@
         }
 
         function animate() {
-            // 【核心修正】：挑戰模式中，視覺比例在 Reveal 階段會反映真實距離
+            // 【距離同步邏輯】：挑戰模式中，視覺比例在 Listening/Guessing/Feedback 階段皆反映真實距離
             let targetActiveDist = 1.0;
             if (isChallengeMode) {
-                if (challengeState === 'feedback' || challengeState === 'replaying') {
-                    targetActiveDist = targetDistance; // 答案揭曉時縮放到真實距離
+                if (challengeState === 'idle' || challengeState === 'preparing') {
+                    targetActiveDist = 3.0; // 準備時在外圈
                 } else {
-                    targetActiveDist = 3.0; // 猜測時保持在外圈
+                    targetActiveDist = targetDistance; // 只要開始測驗，立即縮放到真實距離
                 }
             } else {
                 targetActiveDist = currentRadius; // 沙盒模式跟隨按鈕
@@ -505,8 +519,13 @@
             });
 
             const renderType = isChallengeMode ? targetType : activeSoundType;
+            const stepMultiplier = 12 / (isChallengeMode ? challengeSteps : 12);
+
             if (renderType) {
                 for (let i = 0; i < 12; i++) {
+                    // 只繪製符合目前模式的節點
+                    if (i % stepMultiplier !== 0) continue;
+
                     const node = clockNodes[i]; let alpha = 0.2; let scale = 0.8;
                     if (isChallengeMode) {
                         if (challengeState === 'listening') alpha = 0.05;
@@ -516,7 +535,6 @@
                             if (i === targetAngleIndex) {
                                 alpha = 1.0; scale = 1.3;
                                 ctx.beginPath(); 
-                                // 此時 node.x 已是在 correctDistance 處
                                 const beam = ctx.createLinearGradient(centerX, centerY, node.x, node.y);
                                 beam.addColorStop(0, 'rgba(100, 220, 255, 0.1)'); beam.addColorStop(1, `rgba(${renderType.color}, 0.9)`);
                                 ctx.strokeStyle = beam; ctx.lineWidth = 3; ctx.moveTo(centerX, centerY); ctx.lineTo(node.x, node.y); ctx.stroke();
@@ -573,7 +591,7 @@
             }
             if (clickIdx !== -1) {
                 if (isChallengeMode && challengeState === 'guessing') submitGuess(clickIdx);
-                else if (!isChallengeMode) { if (!audioPlayer) audioPlayer = new DirectionalPlayer(); audioPlayer.play(activeSoundType, ANGLES_DEG[clickIdx], currentRadius, CONSTANT_DURATION); }
+                else if (!isChallengeMode) { if (!audioPlayer) audioPlayer = new DirectionalPlayer(); audioPlayer.play(activeSoundType, BASE_ANGLES[clickIdx], currentRadius, CONSTANT_DURATION); }
             }
         });
 
