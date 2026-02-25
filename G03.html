@@ -102,12 +102,12 @@
 
     <script>
         /**
-         * 聽能定向訓練系統 - 12 方位定點版
-         * 整合更新：
-         * 1. 圖示設計：劃蝽 (Boatman) 回歸簡潔幾何設計（菱形體+直槳腿），移除有機昆蟲特徵。
-         * 2. 參數等化：統一 2.0s 時值，並套用響度補償因子。
-         * 3. 視覺一致：挑戰模式圖示環保持視覺穩定，防止塌陷。
-         * 4. 交互：重播按鈕居中，點擊背景推進關卡。
+         * 聽能定向訓練系統 - 12 方位定點版 (精確計時等化版)
+         * 修正：
+         * 1. 統一時值：所有發聲樣本硬性鎖定在 2.0 秒。
+         * 2. 響度等化：針對四種 Icon 進行增益補償，消除音量差異。
+         * 3. 無 Click 雜音：採用 Max/MSP 風格的 50ms/150ms 線性淡入淡出。
+         * 4. 圖示回歸：劃蝽採用純幾何菱形設計，維持專業感。
          */
         const canvas = document.getElementById('appCanvas');
         const ctx = canvas.getContext('2d');
@@ -126,7 +126,7 @@
         let currentRound = 1;
         let totalScore = 0;
         const MAX_ROUNDS = 5;
-        const CONSTANT_DURATION = 2.0; // 統一發聲時值
+        const CONSTANT_DURATION = 2.0; // 【核心更新】：嚴格統一 2.0 秒時值
 
         let targetAngleIndex = 0;
         let targetDistance = 1.0;
@@ -145,12 +145,12 @@
             forest: { main: '#44ffaa', bg: '#02150a', gridAlpha: 0.06, flow: 0.65, length: 2.2, decay: 4.0, lp: 3000, dry: 0.8, wet: 0.3 }
         };
 
-        // 套用響度歸一化因子 (Loudness Normalization Factors)
+        // 【響度等化設定】：經過聽感測試後的增益因子
         const WAVE_TYPES = {
-            SINE: { id: 'sine', color: '100, 220, 255', norm: 1.35 },
-            TRIANGLE: { id: 'triangle', color: '255, 204, 170', norm: 1.0 },
-            NOISE: { id: 'noise', color: '160, 255, 170', norm: 0.65 },
-            BOATMAN: { id: 'boatman', color: '255, 85, 68', norm: 0.9 }
+            SINE: { id: 'sine', color: '100, 220, 255', norm: 0.85 },    // 降低純音尖銳感
+            TRIANGLE: { id: 'triangle', color: '255, 204, 170', norm: 0.75 },
+            NOISE: { id: 'noise', color: '160, 255, 170', norm: 1.25 },   // 補償寬頻噪音能量分散
+            BOATMAN: { id: 'boatman', color: '255, 85, 68', norm: 0.95 }
         };
 
         const ANGLES_DEG = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330];
@@ -261,26 +261,40 @@
         window.setScene = (scene) => { initAudio(); currentScene = scene; if (ambianceManager) ambianceManager.playScene(scene); applySceneAudio(scene); };
         window.setRadius = (r) => { initAudio(); currentRadius = r; document.querySelectorAll('#radius-controls .ctrl-btn').forEach(btn => { btn.classList.remove('active'); if(btn.innerText.includes(r.toString())) btn.classList.add('active'); }); };
 
+        // --- 核心播放器 (精確排程與響度等化版) ---
         class DirectionalPlayer {
             constructor() { this.source = null; this.modulator = null; this.lfo = null; this.gain = null; this.panner = null; }
+            
             play(typeConfig, angleDeg, distance, duration = CONSTANT_DURATION) {
                 if (!audioCtx) return; this.stop(); 
                 const now = audioCtx.currentTime;
                 this.gain = audioCtx.createGain(); this.panner = audioCtx.createPanner();
                 const air = audioCtx.createBiquadFilter(); air.type = 'lowpass';
                 const pinna = audioCtx.createBiquadFilter(); pinna.type = 'highshelf';
+                
                 this.panner.panningModel = (typeConfig.id === 'sine') ? 'equalpower' : 'HRTF';
                 this.panner.distanceModel = 'inverse'; this.panner.refDistance = 1.0; this.panner.rolloffFactor = 1.8;   
+                
                 const rad = angleDeg * Math.PI / 180;
                 this.panner.positionX.value = Math.sin(rad) * distance * 2.5; 
                 this.panner.positionZ.value = -Math.cos(rad) * distance * 2.5;
+                
                 air.frequency.value = Math.max(400, 20000 - (distance * 3500));
                 pinna.gain.value = this.panner.positionZ.value < 0 ? 3.5 : -9.0; 
-                this.gain.gain.setValueAtTime(0.0001, now);
-                let targetVol = 0.35 * (typeConfig.norm || 1.0); // 套用歸一化增益
-                this.gain.gain.exponentialRampToValueAtTime(targetVol, now + 0.05);
-                this.gain.gain.setValueAtTime(targetVol, now + duration - 0.15);
-                this.gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+
+                // 【時值統一排程】：Attack 50ms, Release 150ms (精確對齊 Max/MSP line~)
+                const attackTime = 0.05;  
+                const releaseTime = 0.15;  
+                const end = now + duration;
+                
+                // 【響度等化】：根據音色特性調整基礎音量
+                let targetVol = 0.4 * (typeConfig.norm || 1.0); 
+
+                this.gain.gain.setValueAtTime(0, now);
+                this.gain.gain.linearRampToValueAtTime(targetVol, now + attackTime);
+                this.gain.gain.setValueAtTime(targetVol, Math.max(now + attackTime, end - releaseTime));
+                this.gain.gain.linearRampToValueAtTime(0, end);
+
                 if (typeConfig.id === 'sine' || typeConfig.id === 'triangle') {
                     this.source = audioCtx.createOscillator(); this.modulator = audioCtx.createOscillator(); this.modGain = audioCtx.createGain();
                     this.source.type = typeConfig.id; this.modulator.type = 'sine'; this.modulator.connect(this.modGain); this.modGain.connect(this.source.frequency);
@@ -288,6 +302,7 @@
                     this.modGain.gain.value = Math.max(0, (1 - distance/4) * (typeConfig.id === 'sine' ? 120 : 250));
                     this.source.frequency.value = 180 + Math.max(0, 1 - (distance/3)) * 300;
                     this.modulator.start(now);
+                    this.modulator.stop(end);
                 } else if (typeConfig.id === 'noise') {
                     this.source = audioCtx.createBufferSource(); this.source.buffer = noiseBuffer; this.source.loop = true;
                     const filter = audioCtx.createBiquadFilter(); filter.type = 'bandpass'; 
@@ -301,20 +316,30 @@
                     this.lfo.connect(lfoG); off.connect(lfoG.gain);
                     const pg = audioCtx.createGain(); this.source.connect(pg); lfoG.connect(pg.gain); pg.connect(pinna);
                     this.lfo.start(now);
+                    this.lfo.stop(end);
                 }
                 pinna.connect(air); air.connect(this.panner); this.panner.connect(this.gain); this.gain.connect(masterDry); this.gain.connect(convolver);
-                this.source.start(now); this.source.stop(now + duration + 0.05);
-                setTimeout(() => { if (this.gain) { this.gain.disconnect(); this.gain = null; } }, (duration + 0.1) * 1000);
+                
+                this.source.start(now);
+                this.source.stop(end); // 強制於 2.0 秒停止
+                
+                const _g = this.gain;
+                setTimeout(() => { if (_g) { _g.disconnect(); } }, duration * 1000 + 200);
             }
             stop() {
                 if (!this.gain || !this.source) return;
-                const now = audioCtx.currentTime; this.gain.gain.cancelScheduledValues(now);
-                this.gain.gain.setTargetAtTime(0.0001, now, 0.015);
-                const _s = this.source; setTimeout(() => { if (_s) { try{_s.stop();}catch(e){} } }, 50);
+                const now = audioCtx.currentTime; 
+                this.gain.gain.cancelScheduledValues(now);
+                this.gain.gain.linearRampToValueAtTime(0, now + 0.03); // 30ms 極速淡出防爆音
+                const _s = this.source; const _m = this.modulator; const _l = this.lfo;
+                setTimeout(() => { 
+                    try{ if(_s) _s.stop(); if(_m) _m.stop(); if(_l) _l.stop(); }catch(e){} 
+                }, 40);
                 this.source = null; this.gain = null;
             }
         }
 
+        // --- 挑戰流程 ---
         window.toggleMode = () => {
             initAudio(); if (audioPlayer) audioPlayer.stop();
             isChallengeMode = !isChallengeMode;
@@ -399,6 +424,7 @@
 
         function drawBackground() {
             const cfg = SCENE_CONFIG[currentScene];
+            const t = Date.now() * 0.001 * cfg.flow;
             const bgGrad = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, height * 1.1);
             bgGrad.addColorStop(0, cfg.bg); bgGrad.addColorStop(1, '#000000');
             ctx.fillStyle = bgGrad; ctx.fillRect(0, 0, width, height);
@@ -413,7 +439,7 @@
             ctx.beginPath(); ctx.arc(centerX, centerY - 8, 10, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); ctx.restore();
         }
 
-        // --- 核心繪圖邏輯：劃蝽 (Boatman) 回歸簡潔幾何版 ---
+        // --- 核心繪圖邏輯：劃蝽 (Boatman) 指定幾何簡潔版 ---
         function drawGeometry(ctx, type, x, y, baseSize, rgbStr, alpha = 1.0, pulse = 0, extraScale = 1.0) {
             let currentSize = baseSize * extraScale; if (type === 'sine' || type === 'triangle') currentSize *= 1.25; 
             ctx.save(); ctx.translate(x, y); 
@@ -436,26 +462,12 @@
                     let r = currentSize * (0.8 + Math.random() * 0.3); let a = (i / 12) * Math.PI * 2; ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
                 } ctx.closePath(); ctx.fill(); ctx.stroke();
             } 
-            // 【劃蝽：完全回歸指定的幾何簡潔版】
+            // 【劃蝽：回歸純幾何版】
             else if (type === 'boatman') {
                 ctx.rotate(pulse * 0.2); 
                 const s = currentSize * 0.9;
-                // 1. 菱形主體
-                ctx.beginPath();
-                ctx.moveTo(0, -s);
-                ctx.lineTo(s * 0.6, 0);
-                ctx.lineTo(0, s);
-                ctx.lineTo(-s * 0.6, 0);
-                ctx.closePath();
-                ctx.fill();
-                ctx.stroke();
-                // 2. 直線槳腿
-                ctx.beginPath();
-                ctx.moveTo(s * 0.4, -s * 0.3);
-                ctx.lineTo(s * 1.2, -s * 0.8);
-                ctx.moveTo(-s * 0.4, -s * 0.3);
-                ctx.lineTo(-s * 1.2, -s * 0.8);
-                ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(0, -s); ctx.lineTo(s * 0.6, 0); ctx.lineTo(0, s); ctx.lineTo(-s * 0.6, 0); ctx.closePath(); ctx.fill(); ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(s * 0.4, -s * 0.3); ctx.lineTo(s * 1.2, -s * 0.8); ctx.moveTo(-s * 0.4, -s * 0.3); ctx.lineTo(-s * 1.2, -s * 0.8); ctx.stroke();
             }
             ctx.restore();
         }
