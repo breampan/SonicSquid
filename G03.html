@@ -31,7 +31,7 @@
         }
         .ctrl-btn.active { background: rgba(100, 220, 255, 0.2); border-color: #64dcff; color: #fff; text-shadow: 0 0 8px rgba(100,220,255,0.5); }
 
-        /* 挑戰介面 */
+        /* 挑戰與模式介面 */
         #challenge-ui {
             position: absolute; top: 25px; left: 20px;
             display: flex; flex-direction: column; gap: 10px; z-index: 200;
@@ -47,6 +47,8 @@
             text-align: center;
         }
         .action-btn:hover { background: #64dcff; color: #01050a; }
+        .action-btn.active { background: #64dcff; color: #01050a; }
+        
         .score-panel { color: #64dcff; font-size: 18px; font-weight: bold; display: none; text-shadow: 0 0 10px rgba(100,220,255,0.5); }
         .round-panel { color: #fff; font-size: 14px; display: none; opacity: 0.8; }
 
@@ -73,11 +75,17 @@
 
     <div id="challenge-ui">
         <div id="mode-selection" class="mode-selector">
-            <button class="action-btn" onclick="toggleMode(4)">開啟 4 方位挑戰</button>
-            <button class="action-btn" onclick="toggleMode(8)">開啟 8 方位挑戰</button>
-            <button class="action-btn" onclick="toggleMode(12)">開啟 12 方位挑戰</button>
+            <button class="action-btn" id="btn-4" 
+                onmouseover="previewSteps(4)" onmouseout="previewSteps(0)" onclick="setSteps(4)">4 方位設定</button>
+            <button class="action-btn" id="btn-8" 
+                onmouseover="previewSteps(8)" onmouseout="previewSteps(0)" onclick="setSteps(8)">8 方位設定</button>
+            <button class="action-btn active" id="btn-12" 
+                onmouseover="previewSteps(12)" onmouseout="previewSteps(0)" onclick="setSteps(12)">12 方位設定</button>
+            
+            <button class="action-btn" style="margin-top: 10px; border-color: #fff; color: #fff;" onclick="startChallenge()">開始五題定向挑戰</button>
         </div>
-        <button id="exit-btn" class="action-btn" style="display:none" onclick="toggleMode()">退出訓練模式</button>
+        
+        <button id="exit-btn" class="action-btn" style="display:none" onclick="exitChallenge()">退出訓練模式</button>
         <div id="round-display" class="round-panel">回合: 1 / 5</div>
         <div id="score-display" class="score-panel">總積分: 0</div>
     </div>
@@ -85,12 +93,14 @@
     <div id="center-hint">請閉上眼聆聽...</div>
 
     <div id="controls-container">
+        <!-- 半徑控制 (沙盒模式專用) -->
         <div class="control-group" id="radius-controls">
             <button class="ctrl-btn" onclick="setRadius(0.5)">0.5m</button>
             <button class="ctrl-btn active" onclick="setRadius(1.0)">1.0m</button>
             <button class="ctrl-btn" onclick="setRadius(2.0)">2.0m</button>
             <button class="ctrl-btn" onclick="setRadius(3.0)">3.0m</button>
         </div>
+        <!-- 場景控制 -->
         <div class="control-group" id="scene-controls">
             <button class="ctrl-btn active" onclick="setScene('bathroom')">一般室內</button>
             <button class="ctrl-btn" onclick="setScene('station')">車站大廳</button>
@@ -102,17 +112,14 @@
     <div id="end-modal">
         <div class="end-title">挑戰完成</div>
         <div class="end-score" id="final-score-text">100</div>
-        <button class="action-btn" style="font-size: 18px; padding: 15px 40px;" onclick="toggleMode()">結束並返回沙盒</button>
+        <button class="action-btn" style="font-size: 18px; padding: 15px 40px;" onclick="exitChallenge()">結束並返回沙盒</button>
     </div>
 
     <canvas id="appCanvas"></canvas>
 
     <script>
         /**
-         * 聽能定向訓練系統 - 12 方位定點版 (多模式與距離視覺化同步版)
-         * 1. 挑戰分級：支援 4, 8, 12 方位模式選擇。
-         * 2. 距離同步：猜測階段方位環即會顯示真實發聲距離 scale。
-         * 3. 聲學等化：2.0s 統一時值，主觀響度補償因子。
+         * 聽能定向訓練系統 - 12 方位定點版 (完整修正與優化版)
          */
         const canvas = document.getElementById('appCanvas');
         const ctx = canvas.getContext('2d');
@@ -127,14 +134,18 @@
         let currentRadius = 1.0;
         let currentVisualFactor = 0.5;
         let isChallengeMode = false;
-        let challengeSteps = 12; // 預設 12 方位
-        let challengeState = 'idle'; // idle, listening, guessing, feedback, replaying, finished
+        
+        let activeSteps = 12;   // 當前確定的方位數
+        let hoverSteps = 0;     // 懸停預覽的方位數
+        let hoveredNodeIndex = -1; // 修復：全域宣告
+
+        let challengeState = 'idle'; 
         let currentRound = 1;
         let totalScore = 0;
         const MAX_ROUNDS = 5;
         const CONSTANT_DURATION = 2.0;
 
-        let targetAngleIndex = 0;
+        let targetAngleDeg = 0;
         let targetDistance = 1.0;
         let targetType = null;
         let targetScene = null;
@@ -158,15 +169,12 @@
             BOATMAN: { id: 'boatman', color: '255, 85, 68', norm: 0.95 }
         };
 
-        // 12 方位基礎角度 (0-330)
-        const BASE_ANGLES = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330];
-        let clockNodes = [];
-        let hoveredNodeIndex = -1;
         let activeSoundType = WAVE_TYPES.SINE;
         let paletteIcons = [];
         let noiseBuffer = null;
         let audioPlayer = null; 
 
+        // --- 背景音管理 ---
         class AmbianceManager {
             constructor() {
                 this.audio = new Audio();
@@ -327,43 +335,48 @@
             }
         }
 
-        window.toggleMode = (steps = 0) => {
-            initAudio(); if (audioPlayer) audioPlayer.stop();
-            const selectionUI = document.getElementById('mode-selection');
-            const exitBtn = document.getElementById('exit-btn');
-            const scoreDisplay = document.getElementById('score-display');
-            const roundDisplay = document.getElementById('round-display');
-            const hint = document.getElementById('center-hint');
-            const radiusControls = document.getElementById('radius-controls');
-            const endModal = document.getElementById('end-modal');
+        // --- 模式管理 ---
+        window.previewSteps = (steps) => {
+            if (isChallengeMode) return;
+            hoverSteps = steps;
+        };
 
-            if (steps > 0) {
-                // 進入特定挑戰模式
-                isChallengeMode = true;
-                challengeSteps = steps;
-                selectionUI.style.display = "none";
-                exitBtn.style.display = "block";
-                scoreDisplay.style.display = "block";
-                roundDisplay.style.display = "block";
-                radiusControls.style.display = "none";
-                totalScore = 0; currentRound = 1;
-                scoreDisplay.innerText = `總積分: 0`; roundDisplay.innerText = `回合: 1 / 5`;
-                challengeState = 'preparing'; 
-                hint.innerHTML = `準備好了嗎？<br><span style='font-size:16px; color:#fff'>點擊畫面開始 ${steps} 方位挑戰</span>`;
-                hint.style.opacity = 1;
-            } else {
-                // 退出或初始狀態
-                isChallengeMode = false;
-                selectionUI.style.display = "flex";
-                exitBtn.style.display = "none";
-                scoreDisplay.style.display = "none";
-                roundDisplay.style.display = "none";
-                radiusControls.style.display = "flex";
-                hint.style.opacity = 0;
-                endModal.style.display = "none";
-                challengeState = 'idle';
-            }
-            hoveredNodeIndex = -1;
+        window.setSteps = (steps) => {
+            if (isChallengeMode) return;
+            activeSteps = steps;
+            document.querySelectorAll('.mode-selector .action-btn').forEach(btn => btn.classList.remove('active'));
+            document.getElementById(`btn-${steps}`).classList.add('active');
+        };
+
+        window.startChallenge = () => {
+            initAudio(); if (audioPlayer) audioPlayer.stop();
+            isChallengeMode = true;
+            document.getElementById('mode-selection').style.display = "none";
+            document.getElementById('exit-btn').style.display = "block";
+            document.getElementById('score-display').style.display = "block";
+            document.getElementById('round-display').style.display = "block";
+            document.getElementById('radius-controls').style.display = "none";
+            
+            totalScore = 0; currentRound = 1;
+            document.getElementById('score-display').innerText = `總積分: 0`;
+            document.getElementById('round-display').innerText = `回合: 1 / 5`;
+            
+            challengeState = 'preparing'; 
+            const hint = document.getElementById('center-hint');
+            hint.innerHTML = `準備好了嗎？<br><span style='font-size:16px; color:#fff'>點擊畫面開始 ${activeSteps} 方位挑戰</span>`;
+            hint.style.opacity = 1;
+        };
+
+        window.exitChallenge = () => {
+            isChallengeMode = false;
+            document.getElementById('mode-selection').style.display = "flex";
+            document.getElementById('exit-btn').style.display = "none";
+            document.getElementById('score-display').style.display = "none";
+            document.getElementById('round-display').style.display = "none";
+            document.getElementById('radius-controls').style.display = "flex";
+            document.getElementById('center-hint').style.opacity = 0;
+            document.getElementById('end-modal').style.display = "none";
+            challengeState = 'idle';
         };
 
         window.nextRound = () => {
@@ -379,18 +392,15 @@
         function startChallengePlay() {
             challengeState = 'listening'; guessIndex = -1;
             const hint = document.getElementById('center-hint'); hint.innerHTML = "請閉上眼，專注聆聽..."; hint.style.opacity = 1;
-            
-            // 根據模式選擇角度索引
-            const stepMultiplier = 12 / challengeSteps;
-            targetAngleIndex = Math.floor(Math.random() * challengeSteps) * stepMultiplier;
-            
+            const stepDeg = 360 / activeSteps;
+            const randomStep = Math.floor(Math.random() * activeSteps);
+            targetAngleDeg = randomStep * stepDeg;
             targetDistance = DISTANCES[Math.floor(Math.random() * DISTANCES.length)];
             targetType = Object.values(WAVE_TYPES)[Math.floor(Math.random() * 4)];
             targetScene = SCENE_KEYS[Math.floor(Math.random() * SCENE_KEYS.length)];
             setScene(targetScene);
             if (!audioPlayer) audioPlayer = new DirectionalPlayer();
-            audioPlayer.play(targetType, BASE_ANGLES[targetAngleIndex], targetDistance, CONSTANT_DURATION);
-            
+            audioPlayer.play(targetType, targetAngleDeg, targetDistance, CONSTANT_DURATION);
             setTimeout(() => {
                 if (challengeState !== 'listening') return; 
                 challengeState = 'guessing'; hint.innerHTML = "聲音來自哪個方位？<br><span style='font-size:16px; color:#fff'>請點擊對應的圖示</span>";
@@ -399,22 +409,26 @@
 
         window.replayCurrent = () => {
             if (!audioPlayer) audioPlayer = new DirectionalPlayer();
-            audioPlayer.play(targetType, BASE_ANGLES[targetAngleIndex], targetDistance, CONSTANT_DURATION);
+            audioPlayer.play(targetType, targetAngleDeg, targetDistance, CONSTANT_DURATION);
             if (challengeState === 'feedback') {
                 challengeState = 'replaying';
                 setTimeout(() => { if(challengeState === 'replaying') challengeState = 'feedback'; }, CONSTANT_DURATION * 1000 + 100);
             }
         };
 
-        function submitGuess(index) {
+        function submitGuess(angleIndex) {
             if (challengeState !== 'guessing') return;
-            guessIndex = index; challengeState = 'feedback';
-            let diffIdx = Math.abs(guessIndex - targetAngleIndex); if (diffIdx > 6) diffIdx = 12 - diffIdx; 
+            const stepDeg = 360 / activeSteps;
+            const guessedAngle = angleIndex * stepDeg;
+            guessIndex = angleIndex; 
+            challengeState = 'feedback';
+            let diff = Math.abs(guessedAngle - targetAngleDeg);
+            if (diff > 180) diff = 360 - diff;
             let roundScore = 0; let feedbackText = ""; let color = "#fff";
-            if (diffIdx === 0) { roundScore = 20; feedbackText = "完全命中！精確的空間感"; color = "#44ffaa"; }
-            else if (diffIdx === 1) { roundScore = 15; feedbackText = "非常接近，只有一格偏差"; color = "#10dcff"; }
-            else if (diffIdx === 2) { roundScore = 10; feedbackText = "方向大致正確，繼續保持"; color = "#ffaa44"; }
-            else if (diffIdx === 3) { roundScore = 5; feedbackText = "略有偏離，注意前後差異"; color = "#ff7744"; }
+            if (diff < 1) { roundScore = 20; feedbackText = "完全命中！精確的空間感"; color = "#44ffaa"; }
+            else if (diff <= 45) { roundScore = 15; feedbackText = "非常接近，有些微偏差"; color = "#10dcff"; }
+            else if (diff <= 90) { roundScore = 10; feedbackText = "方向大致正確，繼續保持"; color = "#ffaa44"; }
+            else if (diff <= 135) { roundScore = 5; feedbackText = "略有偏離，注意濾波差異"; color = "#ff7744"; }
             else { roundScore = 0; feedbackText = "完全相反囉！可以再聽一次校對"; color = "#ff4444"; }
             totalScore += roundScore; document.getElementById('score-display').innerText = `總積分: ${totalScore}`;
             const nextT = (currentRound >= MAX_ROUNDS) ? "點擊背景查看總結算" : "點擊背景進入下一題";
@@ -427,9 +441,7 @@
             ctx.scale(dpr, dpr); centerX = width / 2; listenerPlaneY = height * 0.48; centerY = listenerPlaneY;
             uiScale = Math.min(1.0, width / 1000) + 0.2; iconSize = Math.max(16, Math.min(28, width * 0.05));
             displayRadiusX = Math.min(width * 0.4, height * 0.38); displayRadiusY = displayRadiusX * 0.75; 
-            clockNodes = []; for(let i=0; i<12; i++) clockNodes.push({ angle: BASE_ANGLES[i], x: 0, y: 0 });
-            const paletteX = width - iconSize * 2.0;
-            paletteIcons = [{ typeConfig: WAVE_TYPES.SINE, x: paletteX, y: height * 0.20 }, { typeConfig: WAVE_TYPES.TRIANGLE, x: paletteX, y: height * 0.35 }, { typeConfig: WAVE_TYPES.NOISE, x: paletteX, y: height * 0.50 }, { typeConfig: WAVE_TYPES.BOATMAN, x: paletteX, y: height * 0.65 }];
+            paletteIcons = [{ typeConfig: WAVE_TYPES.SINE, x: width - iconSize * 2.0, y: height * 0.20 }, { typeConfig: WAVE_TYPES.TRIANGLE, x: width - iconSize * 2.0, y: height * 0.35 }, { typeConfig: WAVE_TYPES.NOISE, x: width - iconSize * 2.0, y: height * 0.50 }, { typeConfig: WAVE_TYPES.BOATMAN, x: width - iconSize * 2.0, y: height * 0.65 }];
         }
 
         function drawBackground() {
@@ -439,8 +451,9 @@
             bgGrad.addColorStop(0, cfg.bg); bgGrad.addColorStop(1, '#000000');
             ctx.fillStyle = bgGrad; ctx.fillRect(0, 0, width, height);
             ctx.lineWidth = 1; ctx.strokeStyle = cfg.main + '22';
-            for (let i = 0; i < 12; i++) {
-                const rad = BASE_ANGLES[i] * Math.PI / 180;
+            const bgSteps = hoverSteps || activeSteps;
+            for (let i = 0; i < bgSteps; i++) {
+                const rad = (i * (360 / bgSteps)) * Math.PI / 180;
                 ctx.beginPath(); ctx.moveTo(centerX, centerY); ctx.lineTo(centerX + Math.sin(rad) * width, centerY - Math.cos(rad) * height); ctx.stroke();
             }
             for (let r = 1; r <= 4; r++) { ctx.beginPath(); ctx.ellipse(centerX, centerY, displayRadiusX * (r/4), displayRadiusY * (r/4), 0, 0, Math.PI * 2); ctx.stroke(); }
@@ -484,32 +497,17 @@
             ctx.fillStyle = "#fff"; const triSize = r * 0.55;
             ctx.beginPath(); ctx.moveTo(triSize * 0.6, 0); ctx.lineTo(-triSize * 0.4, -triSize * 0.5); ctx.lineTo(-triSize * 0.4, triSize * 0.5); ctx.closePath(); ctx.fill();
             ctx.font = `bold ${14 * uiScale}px sans-serif`; ctx.textAlign = "center"; ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
-            ctx.fillText("再聽一次", 0, r + 22 * uiScale);
-            ctx.restore();
+            ctx.fillText("再聽一次", 0, r + 22 * uiScale); ctx.restore();
         }
 
         function animate() {
-            // 【距離同步邏輯】：挑戰模式中，視覺比例在 Listening/Guessing/Feedback 階段皆反映真實距離
+            const currentSteps = (hoverSteps && !isChallengeMode) ? hoverSteps : activeSteps;
             let targetActiveDist = 1.0;
             if (isChallengeMode) {
-                if (challengeState === 'idle' || challengeState === 'preparing') {
-                    targetActiveDist = 3.0; // 準備時在外圈
-                } else {
-                    targetActiveDist = targetDistance; // 只要開始測驗，立即縮放到真實距離
-                }
-            } else {
-                targetActiveDist = currentRadius; // 沙盒模式跟隨按鈕
-            }
-
-            const targetScale = getRadiusFactor(targetActiveDist);
-            currentVisualFactor += (targetScale - currentVisualFactor) * 0.12; 
-            
-            for (let i = 0; i < 12; i++) {
-                const rad = clockNodes[i].angle * Math.PI / 180;
-                clockNodes[i].x = centerX + Math.sin(rad) * displayRadiusX * currentVisualFactor;
-                clockNodes[i].y = centerY - Math.cos(rad) * displayRadiusY * currentVisualFactor;
-            }
-
+                if (challengeState === 'idle' || challengeState === 'preparing') targetActiveDist = 3.0;
+                else targetActiveDist = targetDistance; 
+            } else { targetActiveDist = currentRadius; }
+            currentVisualFactor += (getRadiusFactor(targetActiveDist) - currentVisualFactor) * 0.12; 
             drawBackground();
             const now = Date.now(); const pulse = now * 0.002;
             paletteIcons.forEach(p => {
@@ -517,37 +515,28 @@
                 drawGeometry(ctx, p.typeConfig.id, p.x, p.y, iconSize, p.typeConfig.color, isActive ? 1.0 : 0.4, pulse, isActive ? 1.2 : 1.0);
                 if (isActive) { ctx.strokeStyle = `rgba(${p.typeConfig.color}, 0.8)`; ctx.beginPath(); ctx.arc(p.x, p.y, iconSize * 2, 0, Math.PI*2); ctx.stroke(); }
             });
-
             const renderType = isChallengeMode ? targetType : activeSoundType;
-            const stepMultiplier = 12 / (isChallengeMode ? challengeSteps : 12);
-
             if (renderType) {
-                for (let i = 0; i < 12; i++) {
-                    // 只繪製符合目前模式的節點
-                    if (i % stepMultiplier !== 0) continue;
-
-                    const node = clockNodes[i]; let alpha = 0.2; let scale = 0.8;
+                const stepAngle = 360 / currentSteps;
+                for (let i = 0; i < currentSteps; i++) {
+                    const angle = i * stepAngle; const rad = angle * Math.PI / 180;
+                    const nodeX = centerX + Math.sin(rad) * displayRadiusX * currentVisualFactor;
+                    const nodeY = centerY - Math.cos(rad) * displayRadiusY * currentVisualFactor;
+                    let alpha = 0.2; let scale = 0.8;
                     if (isChallengeMode) {
                         if (challengeState === 'listening') alpha = 0.05;
-                        else if (challengeState === 'guessing') {
-                            alpha = 0.35; if (hoveredNodeIndex === i) { alpha = 0.9; scale = 1.15 + 0.1 * Math.sin(now / 150); }
-                        } else if (challengeState === 'feedback' || challengeState === 'replaying') {
-                            if (i === targetAngleIndex) {
-                                alpha = 1.0; scale = 1.3;
-                                ctx.beginPath(); 
-                                const beam = ctx.createLinearGradient(centerX, centerY, node.x, node.y);
+                        else if (challengeState === 'guessing') { alpha = 0.35; if (hoveredNodeIndex === i) { alpha = 0.9; scale = 1.15 + 0.1 * Math.sin(now / 150); } }
+                        else if (challengeState === 'feedback' || challengeState === 'replaying') {
+                            if (Math.abs(angle - targetAngleDeg) < 0.1) {
+                                alpha = 1.0; scale = 1.3; ctx.beginPath(); 
+                                const beam = ctx.createLinearGradient(centerX, centerY, nodeX, nodeY);
                                 beam.addColorStop(0, 'rgba(100, 220, 255, 0.1)'); beam.addColorStop(1, `rgba(${renderType.color}, 0.9)`);
-                                ctx.strokeStyle = beam; ctx.lineWidth = 3; ctx.moveTo(centerX, centerY); ctx.lineTo(node.x, node.y); ctx.stroke();
-                            } else if (i === guessIndex) {
-                                alpha = 0.8; ctx.fillStyle = "#ff4444"; ctx.shadowBlur = 15; ctx.shadowColor = "#ff0000";
-                                ctx.beginPath(); ctx.arc(node.x, node.y, 8, 0, Math.PI*2); ctx.fill(); ctx.shadowBlur = 0;
-                            } else alpha = 0.15;
+                                ctx.strokeStyle = beam; ctx.lineWidth = 3; ctx.moveTo(centerX, centerY); ctx.lineTo(nodeX, nodeY); ctx.stroke();
+                            } else if (i === guessIndex) { alpha = 0.8; ctx.fillStyle = "#ff4444"; ctx.shadowBlur = 15; ctx.shadowColor = "#ff0000"; ctx.beginPath(); ctx.arc(nodeX, nodeY, 8, 0, Math.PI*2); ctx.fill(); ctx.shadowBlur = 0; }
+                            else alpha = 0.15;
                         }
-                    } else {
-                        if (hoveredNodeIndex === i) { alpha = 0.9; scale = 1.15 + 0.1 * Math.sin(now / 150); }
-                        else alpha = 0.4;
-                    }
-                    drawGeometry(ctx, renderType.id, node.x, node.y, iconSize, renderType.color, alpha, pulse, scale);
+                    } else { if (hoveredNodeIndex === i) { alpha = 0.9; scale = 1.15 + 0.1 * Math.sin(now / 150); } else alpha = 0.4; }
+                    drawGeometry(ctx, renderType.id, nodeX, nodeY, iconSize, renderType.color, alpha, pulse, scale);
                 }
             }
             if (isChallengeMode && (challengeState === 'feedback' || challengeState === 'replaying')) {
@@ -562,9 +551,14 @@
                 const d = Math.sqrt((pt.x - replayBtnHitArea.x)**2 + (pt.y - replayBtnHitArea.y)**2);
                 if (d < replayBtnHitArea.r) { hoveredNodeIndex = 999; return; }
             }
+            const currentSteps = (hoverSteps && !isChallengeMode) ? hoverSteps : activeSteps;
+            const stepAngle = 360 / currentSteps;
             if (!isChallengeMode || challengeState === 'guessing') {
-                for (let i = 0; i < 12; i++) {
-                    const n = clockNodes[i]; if (Math.sqrt((pt.x-n.x)**2 + (pt.y-n.y)**2) < 45 * uiScale) { hoveredNodeIndex = i; break; }
+                for (let i = 0; i < currentSteps; i++) {
+                    const rad = (i * stepAngle) * Math.PI / 180;
+                    const nx = centerX + Math.sin(rad) * displayRadiusX * currentVisualFactor;
+                    const ny = centerY - Math.cos(rad) * displayRadiusY * currentVisualFactor;
+                    if (Math.sqrt((pt.x-nx)**2 + (pt.y-ny)**2) < 45 * uiScale) { hoveredNodeIndex = i; break; }
                 }
             }
         });
@@ -585,13 +579,16 @@
                     if (Math.sqrt((pt.x-paletteIcons[i].x)**2 + (pt.y-paletteIcons[i].y)**2) < 45 * uiScale) { activeSoundType = paletteIcons[i].typeConfig; return; }
                 }
             }
-            let clickIdx = -1;
-            for (let i = 0; i < 12; i++) {
-                const n = clockNodes[i]; if (Math.sqrt((pt.x-n.x)**2 + (pt.y-n.y)**2) < 50 * uiScale) { clickIdx = i; break; }
+            const currentSteps = activeSteps; const stepAngle = 360 / currentSteps; let clickIdx = -1;
+            for (let i = 0; i < currentSteps; i++) {
+                const rad = (i * stepAngle) * Math.PI / 180;
+                const nx = centerX + Math.sin(rad) * displayRadiusX * currentVisualFactor;
+                const ny = centerY - Math.cos(rad) * displayRadiusY * currentVisualFactor;
+                if (Math.sqrt((pt.x-nx)**2 + (pt.y-ny)**2) < 50 * uiScale) { clickIdx = i; break; }
             }
             if (clickIdx !== -1) {
                 if (isChallengeMode && challengeState === 'guessing') submitGuess(clickIdx);
-                else if (!isChallengeMode) { if (!audioPlayer) audioPlayer = new DirectionalPlayer(); audioPlayer.play(activeSoundType, BASE_ANGLES[clickIdx], currentRadius, CONSTANT_DURATION); }
+                else if (!isChallengeMode) { if (!audioPlayer) audioPlayer = new DirectionalPlayer(); audioPlayer.play(activeSoundType, clickIdx * stepAngle, currentRadius, CONSTANT_DURATION); }
             }
         });
 
