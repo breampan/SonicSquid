@@ -71,6 +71,9 @@
         <button id="mode-toggle" class="action-btn" onclick="toggleMode()">開啟 12 方位定點挑戰</button>
         <div id="round-display" class="round-panel">回合: 1 / 5</div>
         <div id="score-display" class="score-panel">總積分: 0</div>
+        <div id="feedback-controls" class="challenge-actions" style="display:none">
+            <button class="action-btn" onclick="replayCurrent()">重播此題聲音</button>
+        </div>
     </div>
 
     <div id="center-hint">請閉上眼聆聽...</div>
@@ -103,10 +106,10 @@
     <script>
         /**
          * 聽能定向訓練系統 - 12 方位定點版
-         * 整合：
-         * 1. 移除外部重播按鈕，將其整合至 Canvas 正確答案旁。
-         * 2. 移除下一題按鈕，改為點擊背景推進流程。
-         * 3. 真實背景音 (Ambiance) 與無縫交叉淡化機制。
+         * 修復：
+         * 1. 視覺比例同步：挑戰模式中方位圖示始終保持在外圈位置，防止揭曉答案時因距離較近而縮小塌陷。
+         * 2. 音訊無縫銜接：保留 Max/MSP line~ 風格的 Fade Ramp，徹底根除 Click 與爆音。
+         * 3. 真實背景音 (Ambiance)：透過 Crossfade 提供沉浸式場景。
          */
         const canvas = document.getElementById('appCanvas');
         const ctx = canvas.getContext('2d');
@@ -132,7 +135,6 @@
         let targetScene = null;
         let guessIndex = -1;
 
-        // 重播按鈕位置緩存
         let replayBtnHitArea = { x: 0, y: 0, r: 0 };
 
         const SCENE_KEYS = ['bathroom', 'station', 'cave', 'forest'];
@@ -159,7 +161,6 @@
         let noiseBuffer = null;
         let audioPlayer = null; 
 
-        // --- 背景音管理 ---
         class AmbianceManager {
             constructor() {
                 this.audio = new Audio();
@@ -174,7 +175,6 @@
                 this.fadeTimeout = null;
                 this.currentUrl = null;
             }
-
             playScene(scene) {
                 const targetUrl = this.urls[scene];
                 if (!targetUrl || this.currentUrl === targetUrl) return;
@@ -439,41 +439,31 @@
             ctx.restore();
         }
 
-        // --- 新增：繪製重播小按鈕 ---
         function drawReplayButton(x, y, colorStr, isHovered) {
             const r = 18 * uiScale;
             replayBtnHitArea = { x, y, r };
-            ctx.save();
-            ctx.translate(x, y);
-            
-            // 背景圓
-            ctx.shadowBlur = isHovered ? 15 : 5;
-            ctx.shadowColor = `rgba(${colorStr}, 0.5)`;
+            ctx.save(); ctx.translate(x, y);
+            ctx.shadowBlur = isHovered ? 15 : 5; ctx.shadowColor = `rgba(${colorStr}, 0.5)`;
             ctx.fillStyle = isHovered ? `rgba(${colorStr}, 0.4)` : `rgba(${colorStr}, 0.2)`;
-            ctx.strokeStyle = `rgba(255, 255, 255, 0.8)`;
-            ctx.lineWidth = 1.5;
+            ctx.strokeStyle = `rgba(255, 255, 255, 0.8)`; ctx.lineWidth = 1.5;
             ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI*2); ctx.fill(); ctx.stroke();
-            
-            // 播放三角形
-            ctx.fillStyle = "#fff";
-            const triSize = r * 0.5;
-            ctx.beginPath();
-            ctx.moveTo(triSize * 0.6, 0);
-            ctx.lineTo(-triSize * 0.4, -triSize * 0.5);
-            ctx.lineTo(-triSize * 0.4, triSize * 0.5);
-            ctx.closePath();
-            ctx.fill();
+            ctx.fillStyle = "#fff"; const triSize = r * 0.5;
+            ctx.beginPath(); ctx.moveTo(triSize * 0.6, 0); ctx.lineTo(-triSize * 0.4, -triSize * 0.5); ctx.lineTo(-triSize * 0.4, triSize * 0.5); ctx.closePath(); ctx.fill();
             ctx.restore();
         }
 
         function animate() {
-            let targetActiveDist = isChallengeMode ? ((challengeState === 'feedback' || challengeState === 'replaying') ? targetDistance : 3.0) : currentRadius;
+            // 【關鍵修正】：挑戰模式中始終將目標視覺半徑設為 3.0m (visualFactor = 1.0)
+            // 確保「題目出現時」與「答案揭曉時」的圖示環位置一致，不縮小塌陷
+            let targetActiveDist = isChallengeMode ? 3.0 : currentRadius;
             currentVisualFactor += (getRadiusFactor(targetActiveDist) - currentVisualFactor) * 0.12; 
+            
             for (let i = 0; i < 12; i++) {
                 const rad = clockNodes[i].angle * Math.PI / 180;
                 clockNodes[i].x = centerX + Math.sin(rad) * displayRadiusX * currentVisualFactor;
                 clockNodes[i].y = centerY - Math.cos(rad) * displayRadiusY * currentVisualFactor;
             }
+            
             drawBackground();
             const now = Date.now(); const pulse = now * 0.002;
             paletteIcons.forEach(p => {
@@ -481,6 +471,7 @@
                 drawGeometry(ctx, p.typeConfig.id, p.x, p.y, iconSize, p.typeConfig.color, isActive ? 1.0 : 0.4, pulse, isActive ? 1.2 : 1.0);
                 if (isActive) { ctx.strokeStyle = `rgba(${p.typeConfig.color}, 0.8)`; ctx.beginPath(); ctx.arc(p.x, p.y, iconSize * 2, 0, Math.PI*2); ctx.stroke(); }
             });
+            
             const renderType = isChallengeMode ? targetType : activeSoundType;
             if (renderType) {
                 for (let i = 0; i < 12; i++) {
@@ -492,17 +483,21 @@
                         } else if (challengeState === 'feedback' || challengeState === 'replaying') {
                             if (i === targetAngleIndex) {
                                 alpha = 1.0; scale = 1.3;
-                                ctx.beginPath(); const beam = ctx.createLinearGradient(centerX, centerY, node.x, node.y);
+                                ctx.beginPath(); 
+                                // 此處連線長度依然反映真實距離 (用 targetDistance)
+                                const beamLen = getRadiusFactor(targetDistance);
+                                const beamX = centerX + (node.x - centerX) * beamLen;
+                                const beamY = centerY + (node.y - centerY) * beamLen;
+                                const beam = ctx.createLinearGradient(centerX, centerY, beamX, beamY);
                                 beam.addColorStop(0, 'rgba(100, 220, 255, 0.1)'); beam.addColorStop(1, `rgba(${renderType.color}, 0.9)`);
-                                ctx.strokeStyle = beam; ctx.lineWidth = 3; ctx.moveTo(centerX, centerY); ctx.lineTo(node.x, node.y); ctx.stroke();
+                                ctx.strokeStyle = beam; ctx.lineWidth = 3; ctx.moveTo(centerX, centerY); ctx.lineTo(beamX, beamY); ctx.stroke();
                                 
-                                // 正確答案附近的重播按鈕
+                                // 重播按鈕
                                 const rad = node.angle * Math.PI / 180;
                                 const btnDist = 45 * uiScale;
                                 const btnX = node.x + Math.sin(rad) * btnDist;
                                 const btnY = node.y - Math.cos(rad) * btnDist;
-                                const isReplayHovered = hoveredNodeIndex === 999; // 特殊標記
-                                drawReplayButton(btnX, btnY, renderType.color, isReplayHovered);
+                                drawReplayButton(btnX, btnY, renderType.color, hoveredNodeIndex === 999);
                             } else if (i === guessIndex) {
                                 alpha = 0.8; ctx.fillStyle = "#ff4444"; ctx.shadowBlur = 15; ctx.shadowColor = "#ff0000";
                                 ctx.beginPath(); ctx.arc(node.x, node.y, 8, 0, Math.PI*2); ctx.fill(); ctx.shadowBlur = 0;
@@ -520,7 +515,6 @@
 
         window.addEventListener('pointermove', (e) => {
             const pt = { x: e.clientX, y: e.clientY }; hoveredNodeIndex = -1;
-            // 偵測重播按鈕 Hover
             if (challengeState === 'feedback' || challengeState === 'replaying') {
                 const d = Math.sqrt((pt.x - replayBtnHitArea.x)**2 + (pt.y - replayBtnHitArea.y)**2);
                 if (d < replayBtnHitArea.r) { hoveredNodeIndex = 999; return; }
@@ -535,27 +529,19 @@
         window.addEventListener('pointerdown', (e) => {
             if (e.target.tagName === 'BUTTON') return;
             initAudio(); const pt = { x: e.clientX, y: e.clientY };
-            
-            // 1. 偵測重播按鈕點擊
             if (challengeState === 'feedback' || challengeState === 'replaying') {
                 const d = Math.sqrt((pt.x - replayBtnHitArea.x)**2 + (pt.y - replayBtnHitArea.y)**2);
                 if (d < replayBtnHitArea.r) { replayCurrent(); return; }
             }
-
-            // 2. 挑戰流程推進
             if (isChallengeMode) { 
                 if (challengeState === 'preparing') { startChallengePlay(); return; }
                 if (challengeState === 'feedback') { nextRound(); return; }
             }
-            
-            // 3. 調色盤切換
             if (!isChallengeMode) {
                 for (let i = 0; i < paletteIcons.length; i++) {
                     if (Math.sqrt((pt.x-paletteIcons[i].x)**2 + (pt.y-paletteIcons[i].y)**2) < 45 * uiScale) { activeSoundType = paletteIcons[i].typeConfig; return; }
                 }
             }
-
-            // 4. 節點點擊
             let clickIdx = -1;
             for (let i = 0; i < 12; i++) {
                 const n = clockNodes[i]; if (Math.sqrt((pt.x-n.x)**2 + (pt.y-n.y)**2) < 50 * uiScale) { clickIdx = i; break; }
