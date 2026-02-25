@@ -108,10 +108,9 @@
 
     <script>
         /**
-         * 聽能定向訓練系統 - 12 方位定點挑戰版 (De-click 修正版)
-         * 1. 消除 Click 雜音：導入 Max/MSP [line~] 式的快速 ADSR 封包，解決播放/停止切換瞬間的波形斷裂。
-         * 2. 音場無縫切換：在 applySceneAudio 中實作安全交叉淡化(Crossfade)，切換場景不再爆音。
-         * 3. 動態半徑適配：陣列平滑縮放至對應同心圓 (0.5m~3m)。
+         * 聽能定向訓練系統 - 12 方位定點版 (真實環境音整合版)
+         * 1. 導入真實背景音 (Pixabay CC0)：提供極具包覆感的實地場景體驗。
+         * 2. 無縫交叉淡化 (Crossfade)：背景音與殘響切換時具備安全 Ramp，徹底告別雜音。
          */
         const canvas = document.getElementById('appCanvas');
         const ctx = canvas.getContext('2d');
@@ -127,7 +126,7 @@
         let currentRadius = 1.0;
         let currentVisualFactor = 0.5;
         let isChallengeMode = false;
-        let challengeState = 'idle'; // idle, listening, guessing, feedback, finished
+        let challengeState = 'idle'; 
         let currentRound = 1;
         let totalScore = 0;
         const MAX_ROUNDS = 5;
@@ -155,7 +154,6 @@
             BOATMAN: { id: 'boatman', color: '255, 85, 68' }
         };
 
-        // 12 方位節點
         const ANGLES_DEG = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330];
         let clockNodes = [];
         let hoveredNodeIndex = -1;
@@ -165,8 +163,72 @@
         let noiseBuffer = null;
         let audioPlayer = null; 
 
+        // --- 真實環境音效管理器 (Ambiance Manager) ---
+        class AmbianceManager {
+            constructor() {
+                this.audio = new Audio();
+                this.audio.loop = true;
+                this.audio.volume = 0;
+                
+                // 串接合法開源 CDN (Pixabay Audio - CC0 免版稅)
+                this.urls = {
+                    bathroom: "https://cdn.pixabay.com/audio/2022/03/15/audio_7314275f3a.mp3", // 一般室內：Room Tone
+                    station:  "https://cdn.pixabay.com/audio/2022/01/18/audio_247cd51480.mp3", // 車站大廳：Crowd & Train
+                    cave:     "https://cdn.pixabay.com/audio/2021/08/09/audio_b298495bc2.mp3", // 天然山洞：Cave Wind & Drops
+                    forest:   "https://cdn.pixabay.com/audio/2021/09/06/audio_99c3ed0378.mp3"  // 戶外森林：Birds & Nature
+                };
+                
+                this.fadeTimeout = null;
+                this.currentUrl = null;
+            }
+
+            playScene(scene) {
+                const targetUrl = this.urls[scene];
+                if (!targetUrl || this.currentUrl === targetUrl) return;
+                
+                this.currentUrl = targetUrl;
+                if (this.fadeTimeout) clearTimeout(this.fadeTimeout);
+                
+                // 緩慢淡出避免聽覺斷層
+                const fadeOut = () => {
+                    if (this.audio.volume > 0.02) {
+                        this.audio.volume -= 0.02;
+                        this.fadeTimeout = setTimeout(fadeOut, 30);
+                    } else {
+                        this.audio.volume = 0;
+                        this.audio.pause();
+                        this.audio.src = targetUrl;
+                        this.audio.play().then(() => { fadeIn(); }).catch(e => console.log("等待使用者點擊解鎖環境音", e));
+                    }
+                };
+
+                // 緩慢淡入至背景安全音量 (0.15)，不喧賓奪主
+                const fadeIn = () => {
+                    if (this.audio.volume < 0.15) {
+                        this.audio.volume = Math.min(0.15, this.audio.volume + 0.01);
+                        this.fadeTimeout = setTimeout(fadeIn, 40);
+                    }
+                };
+
+                // 若原本有聲音，先淡出再換軌；否則直接播放
+                if (!this.audio.paused && this.audio.src) {
+                    fadeOut();
+                } else {
+                    this.audio.src = targetUrl;
+                    this.audio.play().then(() => { fadeIn(); }).catch(e => console.log("等待使用者點擊解鎖環境音", e));
+                }
+            }
+        }
+
+        let ambianceManager = null;
+
         // --- 音訊引擎初始化 ---
         function initAudio() {
+            if (!ambianceManager) {
+                ambianceManager = new AmbianceManager();
+                ambianceManager.playScene(currentScene);
+            }
+
             if (!audioCtx) {
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)();
                 masterCompressor = audioCtx.createDynamicsCompressor();
@@ -176,7 +238,6 @@
                 convolver = audioCtx.createConvolver();
                 masterDry = audioCtx.createGain(); masterWet = audioCtx.createGain();
                 
-                // 設定初始 Gain 避免一開始爆音
                 masterDry.gain.value = 0.0001; 
                 masterWet.gain.value = 0.0001;
                 
@@ -193,7 +254,6 @@
             }
         }
 
-        // 【新增】：具有 Ramp 包絡的場景切換，避免 Convolution Buffer 替換產生 Click 雜音
         function applySceneAudio(scene) {
             if (!audioCtx) return;
             const cfg = SCENE_CONFIG[scene];
@@ -214,17 +274,14 @@
             
             const now = audioCtx.currentTime;
             
-            // 1. 快速淡出 Wet (殘響) 以避免換 Buffer 時發生 Click
             masterWet.gain.cancelScheduledValues(now);
             masterWet.gain.setValueAtTime(masterWet.gain.value, now);
             masterWet.gain.linearRampToValueAtTime(0.0001, now + 0.05);
 
-            // 2. 平滑過渡 Dry (直接音)
             masterDry.gain.cancelScheduledValues(now);
             masterDry.gain.setValueAtTime(masterDry.gain.value, now);
             masterDry.gain.linearRampToValueAtTime(cfg.dry, now + 0.1);
 
-            // 3. 在 Wet 完全淡出後(約60ms)安全替換 Buffer，然後將 Wet 淡入目標值
             setTimeout(() => {
                 if (!convolver) return;
                 convolver.buffer = buffer;
@@ -234,7 +291,6 @@
                 masterWet.gain.linearRampToValueAtTime(cfg.wet, resumeTime + 0.1);
             }, 60);
             
-            // 更新 UI 按鈕
             document.querySelectorAll('#scene-controls .ctrl-btn').forEach(btn => {
                 btn.classList.remove('active');
                 if(btn.innerText.includes(getSceneName(scene))) btn.classList.add('active');
@@ -253,7 +309,13 @@
             return 1.0;
         }
 
-        window.setScene = (scene) => { initAudio(); currentScene = scene; applySceneAudio(scene); };
+        window.setScene = (scene) => { 
+            initAudio(); 
+            currentScene = scene; 
+            if (ambianceManager) ambianceManager.playScene(scene);
+            applySceneAudio(scene); 
+        };
+
         window.setRadius = (r) => {
             initAudio();
             currentRadius = r;
@@ -273,8 +335,6 @@
             
             play(typeConfig, angleDeg, distance, duration = 2.5) {
                 if (!audioCtx) return;
-                
-                // 1. 若有舊聲音，先進行無雜音 Fade Out 停止
                 this.stop(); 
                 
                 const now = audioCtx.currentTime;
@@ -299,9 +359,8 @@
                 this.airFilter.frequency.value = Math.max(400, 20000 - (distance * 3500));
                 this.pinnaFilter.gain.value = posZ < 0 ? 3.5 : -9.0; 
 
-                // 2. 建立 [line~] 形式的 Attack / Release 包絡，徹底消除開頭與結尾的 Click
-                const attackTime = 0.05;  // 50ms 快速平滑淡入
-                const releaseTime = 0.1;  // 100ms 平滑淡出
+                const attackTime = 0.05;  
+                const releaseTime = 0.1;  
                 let targetVol = (typeConfig.id === 'sine' || typeConfig.id === 'triangle') ? 0.6 : 0.5;
                 
                 this.gain.gain.setValueAtTime(0.0001, now);
@@ -309,7 +368,6 @@
                 this.gain.gain.setValueAtTime(targetVol, now + duration - releaseTime);
                 this.gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
 
-                // 3. 初始化音源
                 if (typeConfig.id === 'sine' || typeConfig.id === 'triangle') {
                     this.source = audioCtx.createOscillator(); this.modulator = audioCtx.createOscillator(); this.modGain = audioCtx.createGain();
                     this.source.type = typeConfig.id; this.modulator.type = 'sine'; 
@@ -342,12 +400,10 @@
                 
                 this.source.start(now);
                 
-                // 等待淡出包絡結束後再真正 stop
                 this.source.stop(now + duration + 0.05);
                 if (this.modulator) this.modulator.stop(now + duration + 0.05);
                 if (this.lfo) this.lfo.stop(now + duration + 0.05);
                 
-                // 完全清理節點
                 this.stopTimeout = setTimeout(() => { this.cleanupNodes(); }, (duration + 0.1) * 1000);
             }
             
@@ -356,16 +412,14 @@
                 if (!this.gain || !this.source) return;
 
                 const now = audioCtx.currentTime;
-                const fastFade = 0.05; // 50ms 強制中止時的快速淡出
+                const fastFade = 0.05; 
 
                 try {
-                    // 使用 setTargetAtTime 進行安全接軌，防呆防爆音
                     this.gain.gain.cancelScheduledValues(now);
                     this.gain.gain.setValueAtTime(this.gain.gain.value, now);
                     this.gain.gain.linearRampToValueAtTime(0.0001, now + fastFade);
                 } catch (e) {}
 
-                // 保存局部變數讓 setTimeout 執行清理
                 const _s = this.source; const _m = this.modulator; const _l = this.lfo; const _g = this.gain;
 
                 setTimeout(() => {
@@ -405,7 +459,7 @@
             hoveredNodeIndex = -1;
 
             if (isChallengeMode) {
-                btn.innerText = "退出 12 方位定點挑戰";
+                btn.innerText = "退出挑戰模式";
                 scoreDisplay.style.display = "block";
                 roundDisplay.style.display = "block";
                 radiusControls.style.display = "none"; 
