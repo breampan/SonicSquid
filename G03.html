@@ -73,9 +73,9 @@
         <button id="mode-toggle" class="action-btn" onclick="toggleMode()">開啟 12 方位定點挑戰</button>
         <div id="round-display" class="round-panel">回合: 1 / 5</div>
         <div id="score-display" class="score-panel">總積分: 0</div>
+        <!-- 移除了「下一題」按鈕，將操作整合到主畫面點擊 -->
         <div id="feedback-controls" class="challenge-actions" style="display:none">
             <button class="action-btn" onclick="replayCurrent()">重播此題聲音</button>
-            <button class="action-btn" onclick="nextRound()" id="next-btn">下一題</button>
         </div>
     </div>
 
@@ -111,6 +111,7 @@
          * 聽能定向訓練系統 - 12 方位定點版 (真實環境音整合版)
          * 1. 導入真實背景音 (Pixabay CC0)：提供極具包覆感的實地場景體驗。
          * 2. 無縫交叉淡化 (Crossfade)：背景音與殘響切換時具備安全 Ramp，徹底告別雜音。
+         * 3. 直覺化流程：將「下一題」整合入主畫面點擊，簡化挑戰操作。
          */
         const canvas = document.getElementById('appCanvas');
         const ctx = canvas.getContext('2d');
@@ -530,8 +531,19 @@
 
         window.replayCurrent = () => {
             if (challengeState !== 'feedback') return;
+            challengeState = 'replaying';
+            
             if (!audioPlayer) audioPlayer = new DirectionalPlayer();
             audioPlayer.play(targetType, ANGLES_DEG[targetAngleIndex], targetDistance, 2.0);
+            
+            // 複習播放結束後，狀態改回 feedback 以便使用者點擊進入下一題
+            setTimeout(() => {
+                if (challengeState === 'replaying') {
+                    challengeState = 'feedback';
+                    const nextActionText = (currentRound >= MAX_ROUNDS) ? "點擊畫面查看總結算" : "點擊畫面進入下一題";
+                    document.getElementById('challenge-hint').innerHTML = `複習結束<br><span style='font-size:16px; color:#fff'>${nextActionText}</span>`;
+                }
+            }, 2100);
         };
 
         function submitGuess(index) {
@@ -552,11 +564,11 @@
             totalScore += roundScore;
             document.getElementById('score-display').innerText = `總積分: ${totalScore}`;
             
+            const nextActionText = (currentRound >= MAX_ROUNDS) ? "點擊畫面查看總結算" : "點擊畫面進入下一題";
             const hint = document.getElementById('center-hint');
-            hint.innerHTML = `<div class="feedback-score" style="color:${color}">+${roundScore} 分</div>${feedbackText}`;
+            hint.innerHTML = `<div class="feedback-score" style="color:${color}">+${roundScore} 分</div>${feedbackText}<br><span style='font-size:16px; color:#fff'>${nextActionText}</span>`;
             
             document.getElementById('feedback-controls').style.display = "flex";
-            document.getElementById('next-btn').innerText = (currentRound >= MAX_ROUNDS) ? "查看總結算" : "下一題";
         }
 
 
@@ -747,6 +759,12 @@
             if (e.target.tagName === 'BUTTON') return;
             initAudio(); 
             const pt = { x: e.clientX, y: e.clientY };
+
+            // 挑戰流程推進 (點擊主畫面推進)
+            if (isChallengeMode) { 
+                if (challengeState === 'preparing') { startChallengePlay(); return; }
+                if (challengeState === 'feedback') { nextRound(); return; }
+            }
             
             if (!isChallengeMode) {
                 for (let i = 0; i < paletteIcons.length; i++) {
@@ -754,10 +772,6 @@
                         activeSoundType = paletteIcons[i].typeConfig; return;
                     }
                 }
-            }
-
-            if (isChallengeMode) { 
-                if (challengeState === 'preparing') { startChallengePlay(); return; } 
             }
 
             let clickedNodeIndex = -1;
