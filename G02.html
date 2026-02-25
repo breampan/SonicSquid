@@ -36,7 +36,7 @@
         }
         .action-btn {
             background: rgba(100, 220, 255, 0.2); border: 1px solid #64dcff;
-            color: #64dcff; padding: 10px 20px; border-radius: 30px;
+            color: #64dcff; padding: 12px 24px; border-radius: 30px;
             cursor: pointer; font-weight: bold; font-size: 13px; letter-spacing: 1px;
             transition: all 0.3s;
         }
@@ -79,11 +79,11 @@
 
     <script>
         /**
-         * 聽能定向訓練系統 - 自適應顯示版
+         * 聽能定向訓練系統 - 行動裝置優化版
          * 修復：
-         * 1. 自適應縮放：UI 與圖示大小會隨螢幕尺寸自動調整，完美適配 iPhone。
-         * 2. 極致流暢：繼承 Lerp 座標插值 (0.22) 與長平滑常數 (tc=0.22s)。
-         * 3. 挑戰邏輯：成績重置、解盲、連線複習功能一應俱全。
+         * 1. 手機音訊鎖定問題：在互動時強制恢復 AudioContext 狀態。
+         * 2. 自適應縮放：UI 與圖示大小自動適配 iPhone 等不同尺寸螢幕。
+         * 3. 聲學穩定：座標 Lerp 與 tc=0.22s 指數平滑，消除純音 FM 雜訊。
          */
         const canvas = document.getElementById('appCanvas');
         const ctx = canvas.getContext('2d');
@@ -121,20 +121,41 @@
         const activePointers = new Map();
         let fishParticles = [];
 
-        function initAudio() {
-            if (audioCtx) return;
+        // --- 核心啟動機制：修復手機無聲 ---
+        async function initAudio() {
+            if (audioCtx) {
+                // 如果已經存在但處於暫停狀態，則恢復它（對 iOS 至關重要）
+                if (audioCtx.state === 'suspended') {
+                    await audioCtx.resume();
+                }
+                return;
+            }
+
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            
             masterCompressor = audioCtx.createDynamicsCompressor();
             masterCompressor.threshold.setTargetAtTime(-24, audioCtx.currentTime, 0.1);
             masterCompressor.connect(audioCtx.destination);
+            
             convolver = audioCtx.createConvolver();
-            masterDry = audioCtx.createGain(); masterWet = audioCtx.createGain();
-            masterDry.connect(masterCompressor); convolver.connect(masterWet); masterWet.connect(masterCompressor);
+            masterDry = audioCtx.createGain(); 
+            masterWet = audioCtx.createGain();
+            
+            masterDry.connect(masterCompressor); 
+            convolver.connect(masterWet); 
+            masterWet.connect(masterCompressor);
+            
             const bufferSize = audioCtx.sampleRate * 2; 
             noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
             const output = noiseBuffer.getChannelData(0);
             for (let i = 0; i < bufferSize; i++) output[i] = Math.random() * 2 - 1;
+            
             applySceneAudio(currentScene);
+            
+            // 強制啟動
+            if (audioCtx.state === 'suspended') {
+                await audioCtx.resume();
+            }
         }
 
         function applySceneAudio(scene) {
@@ -159,19 +180,21 @@
             masterWet.gain.setTargetAtTime(cfg.wet, now, 0.15);
         }
 
-        window.toggleMode = () => {
-            initAudio();
+        window.toggleMode = async () => {
+            await initAudio(); // 改為非同步等待音訊恢復
             isChallengeMode = !isChallengeMode;
             const btn = document.getElementById('mode-toggle');
             const scoreDisplay = document.getElementById('score-display');
             const fbUI = document.getElementById('feedback-controls');
             const hint = document.getElementById('challenge-hint');
+            
             activeObjects.forEach(obj => obj.cleanup());
             activeObjects = [];
             if (challengeTarget) { challengeTarget.cleanup(); challengeTarget = null; }
             fbUI.style.display = "none";
             totalScore = 0;
             scoreDisplay.innerText = `積分: ${totalScore}`;
+
             if (isChallengeMode) {
                 btn.innerText = "退出訓練模式";
                 scoreDisplay.style.display = "block";
@@ -235,8 +258,9 @@
             if (challengeTarget) challengeTarget.cleanup();
             challengeTarget = null;
             document.getElementById('feedback-controls').style.display = "none";
-            document.getElementById('challenge-hint').innerHTML = "準備下一題...<br><span style='font-size:16px; color:#fff'>點擊畫面繼續</span>";
-            document.getElementById('challenge-hint').style.opacity = 1;
+            const hint = document.getElementById('challenge-hint');
+            hint.innerHTML = "準備下一題...<br><span style='font-size:18px; color:#fff'>點擊畫面繼續</span>";
+            hint.style.opacity = 1;
         };
 
         function drawBackground() {
@@ -289,6 +313,37 @@
                 ctx.beginPath(); ctx.moveTo(s * 0.4, -s * 0.3); ctx.lineTo(s * 1.2, -s * 0.8); ctx.moveTo(-s * 0.4, -s * 0.3); ctx.lineTo(-s * 1.2, -s * 0.8); ctx.stroke();
             }
             ctx.restore();
+        }
+
+        class FishCreature {
+            constructor(x, y, rgb) {
+                this.x = x; this.y = y; this.vx = (Math.random() - 0.5) * 4; this.vy = (Math.random() - 0.5) * 4;
+                this.rgb = rgb; this.size = Math.random() * 1.8 + 1.5; this.life = 1.0; this.decay = 0.0035;
+                setTimeout(() => this.playDeepPulse(), Math.random() * 600);
+            }
+            playDeepPulse() {
+                if (!audioCtx) return;
+                const now = audioCtx.currentTime; const osc = audioCtx.createOscillator();
+                const g = audioCtx.createGain(); const filter = audioCtx.createBiquadFilter();
+                osc.type = 'sine'; osc.frequency.setValueAtTime(45 + Math.random() * 40, now);
+                osc.frequency.exponentialRampToValueAtTime(150, now + 0.1);
+                filter.type = 'lowpass'; filter.frequency.setValueAtTime(180, now);
+                g.gain.setValueAtTime(0, now); g.gain.linearRampToValueAtTime(0.12, now + 0.02); g.gain.exponentialRampToValueAtTime(0.001, now + 0.55);
+                osc.connect(filter); filter.connect(g); g.connect(audioCtx.destination);
+                osc.start(now); osc.stop(now + 0.6);
+            }
+            update(target) {
+                if (target) {
+                    let dx = target.x - this.x; let dy = target.y - this.y; let d = Math.sqrt(dx*dx + dy*dy);
+                    if (d > 5) { this.vx += (dx / d) * 0.16 + (-dy / d) * 0.28; this.vy += (dy / d) * 0.16 + (dx / d) * 0.28; }
+                }
+                this.vx *= 0.965; this.vy *= 0.965; this.x += this.vx; this.y += this.vy; this.life -= this.decay;
+            }
+            draw(ctx) {
+                ctx.save(); ctx.translate(this.x, this.y); ctx.rotate(Math.atan2(this.vy, this.vx));
+                ctx.fillStyle = `rgba(${this.rgb}, ${Math.max(0, this.life) * 0.6})`;
+                ctx.beginPath(); ctx.moveTo(this.size * 2, 0); ctx.quadraticCurveTo(0, this.size, -this.size, 0); ctx.quadraticCurveTo(0, -this.size, this.size * 2, 0); ctx.fill(); ctx.restore();
+            }
         }
 
         class DraggableSound {
@@ -403,11 +458,8 @@
             dpr = window.devicePixelRatio || 1; width = window.innerWidth; height = window.innerHeight;
             canvas.width = width * dpr; canvas.height = height * dpr; canvas.style.width = width + 'px'; canvas.style.height = height + 'px';
             ctx.scale(dpr, dpr); centerX = width / 2; centerY = height / 2; listenerPlaneY = height * 0.55; 
-            
-            // 【自適應計算】：根據寬度動態縮放 UI
-            uiScale = Math.min(1.0, width / 1000) + 0.5; // 在小螢幕時縮放比例約為 0.8
+            uiScale = Math.min(1.0, width / 1000) + 0.5; 
             iconSize = Math.max(22, Math.min(38, width * 0.07));
-            
             const paletteX = width - iconSize * 1.8;
             paletteIcons = [
                 { typeConfig: WAVE_TYPES.SINE, x: paletteX, y: height * 0.15 },
@@ -442,9 +494,11 @@
             requestAnimationFrame(animate);
         }
 
-        window.addEventListener('pointerdown', (e) => {
+        window.addEventListener('pointerdown', async (e) => {
             if (e.target.tagName === 'BUTTON') return;
-            initAudio(); const pt = { x: e.clientX, y: e.clientY };
+            // 每一次點擊都嘗試恢復音訊狀態
+            await initAudio(); 
+            const pt = { x: e.clientX, y: e.clientY };
             if (isChallengeMode) { if (challengeState === 'preparing') startNewChallenge(); else if (challengeState === 'waiting_for_guess') handleChallengeGuess(pt.x, pt.y); return; }
             for (let i = activeObjects.length - 1; i >= 0; i--) { const obj = activeObjects[i]; if (Math.sqrt((pt.x-obj.x)**2 + (pt.y-obj.y)**2) < 55 * uiScale) { obj.isDragging = true; obj.pointerId = e.pointerId; activePointers.set(e.pointerId, obj); activeObjects.push(activeObjects.splice(i, 1)[0]); return; } }
             paletteIcons.forEach(p => { if (Math.sqrt((pt.x-p.x)**2 + (pt.y-p.y)**2) < 45 * uiScale) { const n = new DraggableSound(p.typeConfig, pt.x, pt.y); n.isDragging = true; n.pointerId = e.pointerId; activeObjects.push(n); activePointers.set(e.pointerId, n); n.play(); } });
