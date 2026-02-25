@@ -102,10 +102,10 @@
 
     <script>
         /**
-         * 聽能定向訓練系統 - 12 方位定點版
-         * 1. 視覺升級：劃蝽 (Boatman) 圖示採用有機型態建模，具備節律性呼吸與划水動畫。
-         * 2. 重播按鈕優化：移至畫面正中央引導區域，避免遮擋方位。
-         * 3. 聲學物理：音場 Crossfade 交叉淡化機制。
+         * 聽能定向訓練系統 - 12 方位定點版 (參數統一等化版)
+         * 1. 響度等化：針對四種音色進行主觀音量補償，確保測驗公信力。
+         * 2. 時值統一：發聲長度精確固定於 2.0 秒，消除時間差線索。
+         * 3. 重播優化：按鈕置於中央提示下方，附帶文字導引。
          */
         const canvas = document.getElementById('appCanvas');
         const ctx = canvas.getContext('2d');
@@ -124,6 +124,7 @@
         let currentRound = 1;
         let totalScore = 0;
         const MAX_ROUNDS = 5;
+        const CONSTANT_DURATION = 2.0; // 統一發聲時值
 
         let targetAngleIndex = 0;
         let targetDistance = 1.0;
@@ -157,6 +158,7 @@
         let noiseBuffer = null;
         let audioPlayer = null; 
 
+        // --- 背景音管理 ---
         class AmbianceManager {
             constructor() {
                 this.audio = new Audio();
@@ -184,7 +186,10 @@
                     }
                 };
                 const fadeIn = () => {
-                    if (this.audio.volume < 0.15) { this.audio.volume = Math.min(0.15, this.audio.volume + 0.01); this.fadeTimeout = setTimeout(fadeIn, 40); }
+                    if (this.audio.volume < 0.12) { // 稍微降低環境音量避免干擾測驗
+                        this.audio.volume = Math.min(0.12, this.audio.volume + 0.01);
+                        this.fadeTimeout = setTimeout(fadeIn, 40);
+                    }
                 };
                 if (!this.audio.paused && this.audio.src) fadeOut();
                 else { this.audio.src = targetUrl; this.audio.play().then(() => { fadeIn(); }).catch(e => {}); }
@@ -256,26 +261,43 @@
         window.setScene = (scene) => { initAudio(); currentScene = scene; if (ambianceManager) ambianceManager.playScene(scene); applySceneAudio(scene); };
         window.setRadius = (r) => { initAudio(); currentRadius = r; document.querySelectorAll('#radius-controls .ctrl-btn').forEach(btn => { btn.classList.remove('active'); if(btn.innerText.includes(r.toString())) btn.classList.add('active'); }); };
 
+        // --- 核心播放器 (響度等化與時值統一版) ---
         class DirectionalPlayer {
             constructor() { this.source = null; this.modulator = null; this.lfo = null; this.gain = null; this.panner = null; }
-            play(typeConfig, angleDeg, distance, duration = 2.5) {
+            
+            play(typeConfig, angleDeg, distance, duration = CONSTANT_DURATION) {
                 if (!audioCtx) return; this.stop(); 
                 const now = audioCtx.currentTime;
                 this.gain = audioCtx.createGain(); this.panner = audioCtx.createPanner();
                 const air = audioCtx.createBiquadFilter(); air.type = 'lowpass';
                 const pinna = audioCtx.createBiquadFilter(); pinna.type = 'highshelf';
+                
                 this.panner.panningModel = (typeConfig.id === 'sine') ? 'equalpower' : 'HRTF';
                 this.panner.distanceModel = 'inverse'; this.panner.refDistance = 1.0; this.panner.rolloffFactor = 1.8;   
+                
                 const rad = angleDeg * Math.PI / 180;
                 this.panner.positionX.value = Math.sin(rad) * distance * 2.5; 
                 this.panner.positionZ.value = -Math.cos(rad) * distance * 2.5;
+                
                 air.frequency.value = Math.max(400, 20000 - (distance * 3500));
                 pinna.gain.value = this.panner.positionZ.value < 0 ? 3.5 : -9.0; 
+
+                // 【時值與音量統一】：Attack 50ms, Release 150ms
+                const attackTime = 0.05;  
+                const releaseTime = 0.15;  
+                
+                // 響度歸一化映射：正弦波與三角波較響，噪音與脈衝需補償
+                let targetVol = 0.45;
+                if (typeConfig.id === 'sine') targetVol = 0.42;
+                if (typeConfig.id === 'triangle') targetVol = 0.38;
+                if (typeConfig.id === 'noise') targetVol = 0.58; // 寬頻噪音需要較大增益達成相同響度
+                if (typeConfig.id === 'boatman') targetVol = 0.48;
+
                 this.gain.gain.setValueAtTime(0.0001, now);
-                let targetVol = (typeConfig.id === 'sine' || typeConfig.id === 'triangle') ? 0.6 : 0.5;
-                this.gain.gain.exponentialRampToValueAtTime(targetVol, now + 0.05);
-                this.gain.gain.setValueAtTime(targetVol, now + duration - 0.1);
+                this.gain.gain.exponentialRampToValueAtTime(targetVol, now + attackTime);
+                this.gain.gain.setValueAtTime(targetVol, now + duration - releaseTime);
                 this.gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+
                 if (typeConfig.id === 'sine' || typeConfig.id === 'triangle') {
                     this.source = audioCtx.createOscillator(); this.modulator = audioCtx.createOscillator(); this.modGain = audioCtx.createGain();
                     this.source.type = typeConfig.id; this.modulator.type = 'sine'; this.modulator.connect(this.modGain); this.modGain.connect(this.source.frequency);
@@ -350,19 +372,19 @@
             targetScene = SCENE_KEYS[Math.floor(Math.random() * SCENE_KEYS.length)];
             setScene(targetScene);
             if (!audioPlayer) audioPlayer = new DirectionalPlayer();
-            audioPlayer.play(targetType, ANGLES_DEG[targetAngleIndex], targetDistance, 2.5);
+            audioPlayer.play(targetType, ANGLES_DEG[targetAngleIndex], targetDistance, CONSTANT_DURATION);
             setTimeout(() => {
                 if (challengeState !== 'listening') return; 
                 challengeState = 'guessing'; hint.innerHTML = "聲音來自哪個方位？<br><span style='font-size:16px; color:#fff'>請點擊對應的圖示</span>";
-            }, 2600);
+            }, CONSTANT_DURATION * 1000 + 100);
         }
 
         window.replayCurrent = () => {
             if (!audioPlayer) audioPlayer = new DirectionalPlayer();
-            audioPlayer.play(targetType, ANGLES_DEG[targetAngleIndex], targetDistance, 2.0);
+            audioPlayer.play(targetType, ANGLES_DEG[targetAngleIndex], targetDistance, CONSTANT_DURATION);
             if (challengeState === 'feedback') {
                 challengeState = 'replaying';
-                setTimeout(() => { if(challengeState === 'replaying') challengeState = 'feedback'; }, 2100);
+                setTimeout(() => { if(challengeState === 'replaying') challengeState = 'feedback'; }, CONSTANT_DURATION * 1000 + 100);
             }
         };
 
@@ -375,7 +397,7 @@
             else if (diffIdx === 1) { roundScore = 15; feedbackText = "非常接近，只有一格偏差"; color = "#10dcff"; }
             else if (diffIdx === 2) { roundScore = 10; feedbackText = "方向大致正確，繼續保持"; color = "#ffaa44"; }
             else if (diffIdx === 3) { roundScore = 5; feedbackText = "略有偏離，注意前後差異"; color = "#ff7744"; }
-            else { roundScore = 0; feedbackText = "完全相反囉！可以重播校對聽感"; color = "#ff4444"; }
+            else { roundScore = 0; feedbackText = "完全相反囉！可以點擊下方按鈕重播"; color = "#ff4444"; }
             totalScore += roundScore; document.getElementById('score-display').innerText = `總積分: ${totalScore}`;
             const nextT = (currentRound >= MAX_ROUNDS) ? "點擊背景查看總結算" : "點擊背景進入下一題";
             document.getElementById('center-hint').innerHTML = `<div class="feedback-score" style="color:${color}">+${roundScore} 分</div>${feedbackText}<br><span style='font-size:16px; color:#fff'>${nextT}</span>`;
@@ -409,7 +431,6 @@
             ctx.beginPath(); ctx.arc(centerX, centerY - 8, 10, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); ctx.restore();
         }
 
-        // --- 核心繪圖邏輯：劃蝽 (Boatman) 生物感升級版 ---
         function drawGeometry(ctx, type, x, y, baseSize, rgbStr, alpha = 1.0, pulse = 0, extraScale = 1.0) {
             let currentSize = baseSize * extraScale; if (type === 'sine' || type === 'triangle') currentSize *= 1.25; 
             ctx.save(); ctx.translate(x, y); 
@@ -432,57 +453,26 @@
                 ctx.beginPath(); for (let i = 0; i < 12; i++) {
                     let r = currentSize * (0.8 + Math.random() * 0.3); let a = (i / 12) * Math.PI * 2; ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
                 } ctx.closePath(); ctx.fill(); ctx.stroke();
-            } 
-            // 【劃蝽生物感重構版】
-            else if (type === 'boatman') {
+            } else if (type === 'boatman') {
                 const s = currentSize * 0.9;
-                // 呼吸感：隨 pulse 微調身體縮放
-                const breath = Math.sin(pulse * 2.5) * 0.08 + 1.0;
-                // 划動感：長腿週期性向後撥動
+                const breath = Math.sin(pulse * 2.5) * 0.08 + 1.0; 
                 const paddle = Math.sin(pulse * 4); 
-                
                 ctx.save();
                 ctx.scale(breath, breath);
-                
-                // 1. 身體 (有機橢圓結構)
                 ctx.beginPath();
-                // 頭部
                 ctx.ellipse(0, -s * 0.6, s * 0.4, s * 0.3, 0, 0, Math.PI * 2);
-                // 腹部
                 ctx.ellipse(0, s * 0.1, s * 0.55, s * 0.85, 0, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.stroke();
-
-                // 2. 複眼 (發光白點)
+                ctx.fill(); ctx.stroke();
                 ctx.fillStyle = "rgba(255, 255, 255, 0.8)";
-                ctx.beginPath();
-                ctx.arc(-s * 0.2, -s * 0.65, s * 0.1, 0, Math.PI * 2);
-                ctx.arc(s * 0.2, -s * 0.65, s * 0.1, 0, Math.PI * 2);
-                ctx.fill();
-
-                // 3. 節律划動長腿
-                ctx.lineWidth = 2.5 * uiScale;
-                ctx.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.9})`;
-                
-                // 左長槳腿 (Paddle motion)
-                ctx.beginPath();
-                ctx.moveTo(-s * 0.3, 0);
-                // 模擬撥水動作：從前方划向後方
-                ctx.lineTo(-s * 1.5, s * 0.6 + paddle * s * 0.4);
-                ctx.stroke();
-
-                // 右長槳腿
-                ctx.beginPath();
-                ctx.moveTo(s * 0.3, 0);
-                ctx.lineTo(s * 1.5, s * 0.6 + paddle * s * 0.4);
-                ctx.stroke();
-
+                ctx.beginPath(); ctx.arc(-s * 0.2, -s * 0.65, s * 0.1, 0, Math.PI * 2); ctx.arc(s * 0.2, -s * 0.65, s * 0.1, 0, Math.PI * 2); ctx.fill();
+                ctx.lineWidth = 2.5 * uiScale; ctx.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.9})`;
+                ctx.beginPath(); ctx.moveTo(-s * 0.3, 0); ctx.lineTo(-s * 1.5, s * 0.6 + paddle * s * 0.4); ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(s * 0.3, 0); ctx.lineTo(s * 1.5, s * 0.6 + paddle * s * 0.4); ctx.stroke();
                 ctx.restore();
             }
             ctx.restore();
         }
 
-        // --- 繪製重播小按鈕 ---
         function drawReplayButton(x, y, colorStr, isHovered) {
             const r = 24 * uiScale;
             replayBtnHitArea = { x, y, r };
@@ -584,7 +574,7 @@
             }
             if (clickIdx !== -1) {
                 if (isChallengeMode && challengeState === 'guessing') submitGuess(clickIdx);
-                else if (!isChallengeMode) { if (!audioPlayer) audioPlayer = new DirectionalPlayer(); audioPlayer.play(activeSoundType, ANGLES_DEG[clickIdx], currentRadius, 2.0); }
+                else if (!isChallengeMode) { if (!audioPlayer) audioPlayer = new DirectionalPlayer(); audioPlayer.play(activeSoundType, ANGLES_DEG[clickIdx], currentRadius, CONSTANT_DURATION); }
             }
         });
 

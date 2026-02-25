@@ -12,7 +12,6 @@
             user-select: none; -webkit-user-select: none;
         }
         canvas { display: block; touch-action: none; }
-
         #scene-controls {
             position: absolute; bottom: 25px; left: 50%;
             transform: translateX(-50%); display: flex; gap: 8px;
@@ -21,7 +20,6 @@
             border: 1px solid rgba(100, 220, 255, 0.1); z-index: 100;
             max-width: 90vw; overflow-x: auto;
         }
-
         .scene-btn {
             background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.1);
             color: rgba(200, 240, 255, 0.6); padding: 7px 14px; border-radius: 20px;
@@ -29,7 +27,6 @@
             white-space: nowrap;
         }
         .scene-btn.active { background: rgba(100, 220, 255, 0.2); border-color: #64dcff; color: #fff; }
-
         #challenge-ui {
             position: absolute; top: 25px; left: 20px;
             display: flex; flex-direction: column; gap: 10px; z-index: 200;
@@ -42,12 +39,7 @@
         }
         .action-btn:hover { background: #64dcff; color: #01050a; }
         .score-panel { color: #64dcff; font-size: 18px; font-weight: bold; display: none; text-shadow: 0 0 10px rgba(100,220,255,0.5); }
-        
-        #replay-ui { 
-            position: absolute; z-index: 200; display: none; 
-            pointer-events: auto; transform: translate(-50%, 0);
-        }
-
+        #replay-ui { position: absolute; z-index: 200; display: none; pointer-events: auto; transform: translate(-50%, 0); }
         #challenge-hint {
             position: absolute; top: 45%; left: 50%;
             transform: translate(-50%, -50%); color: #64dcff;
@@ -56,8 +48,6 @@
             text-shadow: 0 0 20px rgba(100, 220, 255, 0.8);
             line-height: 1.6; width: 85%;
         }
-
-        /* 評估報告樣式 */
         #report-overlay {
             display: none; position: absolute; top: 50%; left: 50%; 
             transform: translate(-50%, -50%); background: rgba(5, 15, 25, 0.9); 
@@ -115,10 +105,10 @@
         };
 
         const WAVE_TYPES = {
-            SINE: { id: 'sine', color: '100, 220, 255' },
-            TRIANGLE: { id: 'triangle', color: '255, 204, 170' },
-            NOISE: { id: 'noise', color: '160, 255, 170' },
-            BOATMAN: { id: 'boatman', color: '255, 85, 68' }
+            SINE: { id: 'sine', color: '100, 220, 255', norm: 1.5 },   // 補償較弱的純音
+            TRIANGLE: { id: 'triangle', color: '255, 204, 170', norm: 1.0 },
+            NOISE: { id: 'noise', color: '160, 255, 170', norm: 0.6 },  // 調降能量強大的雜訊
+            BOATMAN: { id: 'boatman', color: '255, 85, 68', norm: 0.85 } // 調降尖銳的鋸齒波
         };
 
         let isChallengeMode = false;
@@ -281,6 +271,7 @@
         class DraggableSound {
             constructor(typeConfig, x, y) {
                 this.type = typeConfig.id; this.rgb = typeConfig.color; this.x = x; this.y = y;
+                this.normFactor = typeConfig.norm || 1.0; // 響度歸一化因子
                 this.smoothedX = x; this.smoothedY = y;
                 this.prevDist = 0; this.velocity = 0; this.dopplerFactor = 1.0; 
                 this.isDragging = false; this.isFading = false; this.isChallengeObject = false; 
@@ -318,7 +309,8 @@
                 }
                 this.pinnaFilter.connect(this.airFilter); this.airFilter.connect(this.panner); this.panner.connect(this.sidechainGain); this.sidechainGain.connect(this.gain);
                 this.updatePanner(true);
-                this.gain.gain.setTargetAtTime(0.4, now + 0.05, 0.22); this.gain.connect(masterDry); this.gain.connect(convolver);
+                this.gain.gain.setTargetAtTime(0.35 * this.normFactor, now + 0.05, 0.22); // 套用歸一化係數
+                this.gain.connect(masterDry); this.gain.connect(convolver);
                 this.source.start(now + 0.05);
             }
 
@@ -350,39 +342,32 @@
                 this.panner.positionZ.setTargetAtTime(posZ, now, tc);
                 this.airFilter.frequency.setTargetAtTime(Math.max(400, 20000 - (Math.abs(posZ/4.5) * 18500)), now, 0.12);
                 this.pinnaFilter.gain.setTargetAtTime(posZ < 0 ? 3.5 : -9.0, now, tc);
-                let volBase = 0.5 * this.life;
+                
+                // 核心修正：響度歸一化音量計算
+                let volBase = 0.35 * this.life * this.normFactor;
                 if (this.isDragging) volBase *= (1.0 + (1.0 - Math.min(1.0, Math.abs(posZ/4.5))) * 1.2);
                 else if (this.isChallengeObject) volBase *= (1.0 + (1.0 - Math.min(1.0, Math.abs(posZ/4.5))) * 0.9);
+                
                 if (this.type === 'noise' && this.filter) {
                     this.filter.Q.setTargetAtTime(Math.max(1.5, 25 - (Math.abs(posZ/4.5) * 23.5)), now, 0.2);
                     this.filter.frequency.setTargetAtTime((4200 - (Math.abs(posZ/4.5) * 2500)) * this.dopplerFactor, now, 0.1);
-                    this.gain.gain.setTargetAtTime(volBase, now, tc);
                 } else if ((this.type === 'sine' || this.type === 'triangle') && this.modulator) {
                     const xRatio = (this.smoothedX / width);
                     this.modulator.frequency.setTargetAtTime(0.5 + xRatio * (this.type === 'sine' ? 80 : 150), now, tc);
                     this.modGain.gain.setTargetAtTime(Math.max(0, (1 - Math.abs(posZ/4.5)) * (this.type === 'sine' ? 120 : 250) * this.life), now, tc);
                     const h = Math.max(0, Math.min(1, 1 - (this.smoothedY / height)));
                     this.source.frequency.setTargetAtTime((180 + h * 450) * this.dopplerFactor, now, tc);
-                    this.gain.gain.setTargetAtTime(volBase * 1.15, now, tc);
-                } else { this.gain.gain.setTargetAtTime(volBase, now, tc); }
+                }
+                this.gain.gain.setTargetAtTime(volBase, now, tc);
             }
 
             muteChallenge() { 
                 if (this.gain) { 
-                    this.isMuted = true;
-                    this.gain.gain.cancelScheduledValues(audioCtx.currentTime); 
+                    this.isMuted = true; this.gain.gain.cancelScheduledValues(audioCtx.currentTime); 
                     this.gain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.8); 
                 } 
             }
-            cleanup() { 
-                if(this.source) { 
-                    try { 
-                        this.source.stop(audioCtx.currentTime + 0.1); 
-                        if(this.modulator) this.modulator.stop(audioCtx.currentTime + 0.1);
-                    } catch(e) {} 
-                } 
-                this.source = null; 
-            }
+            cleanup() { if(this.source) { try { this.source.stop(audioCtx.currentTime + 0.1); if(this.modulator) this.modulator.stop(audioCtx.currentTime + 0.1); } catch(e) {} } this.source = null; }
             update() {
                 this.pulse += 0.08;
                 if (this.isDragging) { 
@@ -396,8 +381,7 @@
                         this.smoothedX += (this.x - this.smoothedX) * 0.22; this.smoothedY += (this.y - this.smoothedY) * 0.22;
                         this.updatePanner(); replayIndex += 2; 
                     } else { 
-                        challengeState = 'feedback'; this.muteChallenge(); 
-                        positionReplayButton();
+                        challengeState = 'feedback'; this.muteChallenge(); positionReplayButton();
                         document.getElementById('challenge-hint').innerHTML = "複習結束<br><span style='font-size:16px; color:#fff'>點擊畫面繼續" + (questionsDone < 5 ? "下一題" : "看報告") + "</span>"; 
                     }
                 }
@@ -408,41 +392,28 @@
 
         function positionReplayButton() {
             if (!challengeTarget) return;
-            const ui = document.getElementById('replay-ui');
-            const offset = 65 * uiScale;
+            const ui = document.getElementById('replay-ui'); const offset = 65 * uiScale;
             ui.style.left = challengeTarget.x + "px";
             ui.style.top = (challengeTarget.y > centerY) ? Math.min(height - 80, challengeTarget.y + offset) + "px" : Math.max(80, challengeTarget.y - offset - 40) + "px";
         }
 
         window.toggleMode = () => {
-            initAudio(); stopAllSounds();
-            document.getElementById('report-overlay').style.display = "none";
+            initAudio(); stopAllSounds(); document.getElementById('report-overlay').style.display = "none";
             isChallengeMode = !isChallengeMode;
-            const btn = document.getElementById('mode-toggle');
-            const scoreDisplay = document.getElementById('score-display');
-            const hint = document.getElementById('challenge-hint');
-            document.getElementById('replay-ui').style.display = "none";
-            
+            const btn = document.getElementById('mode-toggle'); const scoreDisplay = document.getElementById('score-display');
+            const hint = document.getElementById('challenge-hint'); document.getElementById('replay-ui').style.display = "none";
             if (isChallengeMode) {
                 btn.innerText = "退出訓練模式"; scoreDisplay.style.display = "block";
-                questionsDone = 0; totalScore = 0; sessionScores = [];
-                updateScoreUI();
-                challengeState = 'preparing';
-                hint.innerHTML = "準備好了嗎？<br><span style='font-size:16px; color:#fff'>點擊畫面任何地方開始五題聽能挑戰</span>";
-                hint.style.opacity = 1;
+                questionsDone = 0; totalScore = 0; sessionScores = []; updateScoreUI();
+                challengeState = 'preparing'; hint.innerHTML = "準備好了嗎？<br><span style='font-size:16px; color:#fff'>點擊畫面任何地方開始五題聽能挑戰</span>"; hint.style.opacity = 1;
             } else {
-                btn.innerText = "開啟聽能定向挑戰"; scoreDisplay.style.display = "none";
-                hint.style.opacity = 0; challengeState = 'idle';
+                btn.innerText = "開啟聽能定向挑戰"; scoreDisplay.style.display = "none"; hint.style.opacity = 0; challengeState = 'idle';
             }
         };
 
         function startNewChallenge() {
-            stopAllSounds(); 
-            challengeState = 'listening';
-            document.getElementById('replay-ui').style.display = "none";
-            const hint = document.getElementById('challenge-hint');
-            hint.innerHTML = `第 ${questionsDone + 1} 題：聆聽聲音移動...`;
-            hint.style.opacity = 1;
+            stopAllSounds(); challengeState = 'listening'; document.getElementById('replay-ui').style.display = "none";
+            const hint = document.getElementById('challenge-hint'); hint.innerHTML = `第 ${questionsDone + 1} 題：聆聽聲音移動...`; hint.style.opacity = 1;
             const randomType = Object.values(WAVE_TYPES)[Math.floor(Math.random() * 4)];
             const rx = width*0.25 + Math.random()*width*0.5; const ry = height*0.25 + Math.random()*height*0.5;
             challengeTarget = new DraggableSound(randomType, rx, ry);
@@ -464,50 +435,28 @@
             challengeTarget.play();
         }
 
-        window.startReplay = () => {
-            if (!challengeTarget) return;
-            stopAllSounds(true); challengeState = 'replaying'; replayIndex = 0;
-            document.getElementById('replay-ui').style.display = "none";
-            document.getElementById('challenge-hint').innerHTML = "正在進行軌跡複習...";
-            challengeTarget.life = 1.0; challengeTarget.play(); 
-        };
+        window.startReplay = () => { if (!challengeTarget) return; stopAllSounds(true); challengeState = 'replaying'; replayIndex = 0; document.getElementById('replay-ui').style.display = "none"; document.getElementById('challenge-hint').innerHTML = "正在進行軌跡複習..."; challengeTarget.life = 1.0; challengeTarget.play(); };
 
         function handleChallengeGuess(x, y) {
             challengeState = 'feedback'; lastGuessX = x; lastGuessY = y;
             const dist = Math.sqrt((x - challengeTarget.x)**2 + (y - challengeTarget.y)**2);
-            // 每題滿分 20，共 100 分
             const qScore = Math.max(0, Math.round(20 * (1 - dist / (400 * uiScale))));
-            totalScore += qScore;
-            sessionScores.push(qScore);
-            questionsDone++;
-            updateScoreUI();
-            
-            positionReplayButton();
-            document.getElementById('replay-ui').style.display = "block";
+            totalScore += qScore; sessionScores.push(qScore); questionsDone++; updateScoreUI();
+            positionReplayButton(); document.getElementById('replay-ui').style.display = "block";
             document.getElementById('challenge-hint').innerHTML = `方位已揭曉 (本題得分: ${qScore})<br><span style='font-size:16px; color:#fff'>點擊畫面繼續${questionsDone < 5 ? "下一題" : "看評估報告"}</span>`;
             challengeTarget.life = 1.0;
         }
 
-        function updateScoreUI() {
-            document.getElementById('score-display').innerText = `題數: ${questionsDone}/5 | 總積分: ${totalScore}`;
-        }
+        function updateScoreUI() { document.getElementById('score-display').innerText = `題數: ${questionsDone}/5 | 總積分: ${totalScore}`; }
 
         function showFinalReport() {
-            challengeState = 'idle';
-            stopAllSounds();
-            const overlay = document.getElementById('report-overlay');
-            const content = document.getElementById('report-content');
-            const avgAcc = (totalScore / 1).toFixed(1); // 已經是 100 分比
-            
+            challengeState = 'idle'; stopAllSounds();
+            const overlay = document.getElementById('report-overlay'); const content = document.getElementById('report-content');
             content.innerHTML = `
                 <div style="font-size:32px; font-weight:bold; margin-bottom:10px;">${totalScore} <span style="font-size:16px">/ 100</span></div>
                 <div style="color:#fff; margin-bottom:15px;">準確度評級：${totalScore >= 90 ? '卓越' : totalScore >= 75 ? '良好' : '仍有進步空間'}</div>
-                <div style="text-align:left; padding-left:20px;">
-                    ${sessionScores.map((s, i) => `Q${i+1}: ${s}pt`).join(' | ')}
-                </div>
-            `;
-            overlay.style.display = "block";
-            document.getElementById('challenge-hint').style.opacity = 0;
+                <div style="text-align:left; padding-left:20px;">${sessionScores.map((s, i) => `Q${i+1}: ${s}pt`).join(' | ')}</div>`;
+            overlay.style.display = "block"; document.getElementById('challenge-hint').style.opacity = 0;
         }
 
         function setScene(scene) { initAudio(); stopAllSounds(); currentScene = scene; document.querySelectorAll('.scene-btn').forEach(btn => btn.classList.remove('active')); if(event) event.target.classList.add('active'); applySceneAudio(scene); }
@@ -518,19 +467,13 @@
             ctx.scale(dpr, dpr); centerX = width / 2; centerY = height / 2; listenerPlaneY = height * 0.55; 
             uiScale = Math.min(1.0, width / 1000) + 0.5; iconSize = Math.max(22, Math.min(36, width * 0.075));
             const paletteX = width - iconSize * 1.6;
-            paletteIcons = [
-                { typeConfig: WAVE_TYPES.SINE, x: paletteX, y: height * 0.15 }, { typeConfig: WAVE_TYPES.TRIANGLE, x: paletteX, y: height * 0.28 },
-                { typeConfig: WAVE_TYPES.NOISE, x: paletteX, y: height * 0.41 }, { typeConfig: WAVE_TYPES.BOATMAN, x: paletteX, y: height * 0.54 }
-            ];
+            paletteIcons = [{ typeConfig: WAVE_TYPES.SINE, x: paletteX, y: height * 0.15 }, { typeConfig: WAVE_TYPES.TRIANGLE, x: paletteX, y: height * 0.28 }, { typeConfig: WAVE_TYPES.NOISE, x: paletteX, y: height * 0.41 }, { typeConfig: WAVE_TYPES.BOATMAN, x: paletteX, y: height * 0.54 }];
             initBackgroundVisuals();
         }
 
         function animate() {
             drawUnderwaterBackground();
-            if (!isChallengeMode) {
-                ctx.fillStyle = 'rgba(255, 255, 255, 0.01)'; ctx.fillRect(width - iconSize * 2.5, 0, iconSize * 2.5, height);
-                paletteIcons.forEach(p => drawGeometry(ctx, p.typeConfig.id, p.x, p.y, iconSize, p.typeConfig.color, 0.85, Date.now()*0.002));
-            }
+            if (!isChallengeMode) { paletteIcons.forEach(p => drawGeometry(ctx, p.typeConfig.id, p.x, p.y, iconSize, p.typeConfig.color, 0.85, Date.now()*0.002)); }
             activeObjects.forEach(obj => { obj.update(); obj.draw(ctx); });
             if (challengeTarget) {
                 challengeTarget.update(); challengeTarget.draw(ctx);
@@ -551,45 +494,22 @@
         window.addEventListener('pointerdown', (e) => {
             if (e.target.closest('button') || e.target.closest('#scene-controls') || e.target.closest('#report-overlay')) return;
             initAudio(); const pt = { x: e.clientX, y: e.clientY };
-            
             if (isChallengeMode) { 
                 if (challengeState === 'preparing') { startNewChallenge(); return; } 
                 if (challengeState === 'waiting_for_guess') { handleChallengeGuess(pt.x, pt.y); return; } 
                 if (challengeState === 'feedback') {
-                    if (questionsDone < 5) {
-                        challengeState = 'preparing';
-                        if (challengeTarget) challengeTarget.cleanup();
-                        challengeTarget = null;
-                        document.getElementById('replay-ui').style.display = "none";
-                        document.getElementById('challenge-hint').innerHTML = `準備下一題...<br><span style='font-size:18px; color:#fff'>點擊畫面開始</span>`;
-                        document.getElementById('challenge-hint').style.opacity = 1;
-                    } else {
-                        showFinalReport();
-                    }
-                    return;
-                }
-                return; 
+                    if (questionsDone < 5) { challengeState = 'preparing'; if (challengeTarget) challengeTarget.cleanup(); challengeTarget = null; document.getElementById('replay-ui').style.display = "none"; document.getElementById('challenge-hint').innerHTML = `準備下一題...<br><span style='font-size:18px; color:#fff'>點擊畫面開始</span>`; document.getElementById('challenge-hint').style.opacity = 1; } 
+                    else { showFinalReport(); } return;
+                } return; 
             }
-            
             let paletteHit = false;
-            paletteIcons.forEach(p => { 
-                if (Math.sqrt((pt.x-p.x)**2 + (pt.y-p.y)**2) < 50 * uiScale) { 
-                    const n = new DraggableSound(p.typeConfig, pt.x, pt.y); 
-                    n.isDragging = true; n.pointerId = e.pointerId; activeObjects.push(n); activePointers.set(e.pointerId, n); n.play(); paletteHit = true;
-                } 
-            });
+            paletteIcons.forEach(p => { if (Math.sqrt((pt.x-p.x)**2 + (pt.y-p.y)**2) < 50 * uiScale) { const n = new DraggableSound(p.typeConfig, pt.x, pt.y); n.isDragging = true; n.pointerId = e.pointerId; activeObjects.push(n); activePointers.set(e.pointerId, n); n.play(); paletteHit = true; } });
             if (paletteHit) return;
-            for (let i = activeObjects.length - 1; i >= 0; i--) { 
-                const obj = activeObjects[i]; if (Math.sqrt((pt.x-obj.x)**2 + (pt.y-obj.y)**2) < 55 * uiScale) { 
-                    obj.isDragging = true; obj.pointerId = e.pointerId; activePointers.set(e.pointerId, obj); activeObjects.push(activeObjects.splice(i, 1)[0]); return; 
-                } 
-            }
+            for (let i = activeObjects.length - 1; i >= 0; i--) { const obj = activeObjects[i]; if (Math.sqrt((pt.x-obj.x)**2 + (pt.y-obj.y)**2) < 55 * uiScale) { obj.isDragging = true; obj.pointerId = e.pointerId; activePointers.set(e.pointerId, obj); activeObjects.push(activeObjects.splice(i, 1)[0]); return; } }
         }, { passive: false });
 
         window.addEventListener('pointermove', (e) => { const obj = activePointers.get(e.pointerId); if (obj) { obj.x = e.clientX; obj.y = e.clientY; } });
-        window.addEventListener('pointerup', (e) => { 
-            const obj = activePointers.get(e.pointerId); if (obj) { obj.isDragging = false; obj.startFadeOut(); activePointers.delete(e.pointerId); } 
-        });
+        window.addEventListener('pointerup', (e) => { const obj = activePointers.get(e.pointerId); if (obj) { obj.isDragging = false; obj.startFadeOut(); activePointers.delete(e.pointerId); } });
         window.addEventListener('resize', initLayout); initLayout(); animate();
     </script>
 </body>
