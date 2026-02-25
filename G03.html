@@ -103,10 +103,9 @@
     <script>
         /**
          * 聽能定向訓練系統 - 12 方位定點版
-         * 修正更新：
-         * 1. 重播按鈕優化：移至畫面正中央「進入下一題」文字下方，並配有「再聽一次」標註。
-         * 2. 視覺防重疊：確保挑戰模式下圖示始終保持在外圈，揭曉答案時不產生視覺塌陷。
-         * 3. 聲學無雜音：採用音場 Crossfade 與 50ms 播放淡入淡出。
+         * 1. 視覺升級：劃蝽 (Boatman) 圖示採用有機型態建模，具備節律性呼吸與划水動畫。
+         * 2. 重播按鈕優化：移至畫面正中央引導區域，避免遮擋方位。
+         * 3. 聲學物理：音場 Crossfade 交叉淡化機制。
          */
         const canvas = document.getElementById('appCanvas');
         const ctx = canvas.getContext('2d');
@@ -410,13 +409,16 @@
             ctx.beginPath(); ctx.arc(centerX, centerY - 8, 10, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); ctx.restore();
         }
 
+        // --- 核心繪圖邏輯：劃蝽 (Boatman) 生物感升級版 ---
         function drawGeometry(ctx, type, x, y, baseSize, rgbStr, alpha = 1.0, pulse = 0, extraScale = 1.0) {
             let currentSize = baseSize * extraScale; if (type === 'sine' || type === 'triangle') currentSize *= 1.25; 
             ctx.save(); ctx.translate(x, y); 
             const glow = ctx.createRadialGradient(0, 0, 0, 0, 0, currentSize * 3);
             glow.addColorStop(0, `rgba(${rgbStr}, ${alpha * 0.5})`); glow.addColorStop(1, 'transparent');
             ctx.fillStyle = glow; ctx.beginPath(); ctx.arc(0, 0, currentSize * 3, 0, Math.PI * 2); ctx.fill();
+            
             ctx.fillStyle = `rgba(${rgbStr}, ${alpha})`; ctx.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.9})`; ctx.lineWidth = 2.0;
+            
             if (type === 'sine') {
                 const r = Math.max(0.1, currentSize * 0.65 + Math.sin(pulse * 2.0) * 3);
                 ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
@@ -430,44 +432,69 @@
                 ctx.beginPath(); for (let i = 0; i < 12; i++) {
                     let r = currentSize * (0.8 + Math.random() * 0.3); let a = (i / 12) * Math.PI * 2; ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
                 } ctx.closePath(); ctx.fill(); ctx.stroke();
-            } else if (type === 'boatman') {
-                ctx.rotate(pulse * 0.4); const s = currentSize * 0.9;
-                ctx.beginPath(); ctx.moveTo(0, -s); ctx.lineTo(s * 0.6, 0); ctx.lineTo(0, s); ctx.lineTo(-s * 0.6, 0); ctx.closePath(); ctx.fill(); ctx.stroke();
+            } 
+            // 【劃蝽生物感重構版】
+            else if (type === 'boatman') {
+                const s = currentSize * 0.9;
+                // 呼吸感：隨 pulse 微調身體縮放
+                const breath = Math.sin(pulse * 2.5) * 0.08 + 1.0;
+                // 划動感：長腿週期性向後撥動
+                const paddle = Math.sin(pulse * 4); 
+                
+                ctx.save();
+                ctx.scale(breath, breath);
+                
+                // 1. 身體 (有機橢圓結構)
+                ctx.beginPath();
+                // 頭部
+                ctx.ellipse(0, -s * 0.6, s * 0.4, s * 0.3, 0, 0, Math.PI * 2);
+                // 腹部
+                ctx.ellipse(0, s * 0.1, s * 0.55, s * 0.85, 0, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+
+                // 2. 複眼 (發光白點)
+                ctx.fillStyle = "rgba(255, 255, 255, 0.8)";
+                ctx.beginPath();
+                ctx.arc(-s * 0.2, -s * 0.65, s * 0.1, 0, Math.PI * 2);
+                ctx.arc(s * 0.2, -s * 0.65, s * 0.1, 0, Math.PI * 2);
+                ctx.fill();
+
+                // 3. 節律划動長腿
+                ctx.lineWidth = 2.5 * uiScale;
+                ctx.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.9})`;
+                
+                // 左長槳腿 (Paddle motion)
+                ctx.beginPath();
+                ctx.moveTo(-s * 0.3, 0);
+                // 模擬撥水動作：從前方划向後方
+                ctx.lineTo(-s * 1.5, s * 0.6 + paddle * s * 0.4);
+                ctx.stroke();
+
+                // 右長槳腿
+                ctx.beginPath();
+                ctx.moveTo(s * 0.3, 0);
+                ctx.lineTo(s * 1.5, s * 0.6 + paddle * s * 0.4);
+                ctx.stroke();
+
+                ctx.restore();
             }
             ctx.restore();
         }
 
-        // --- 修正：重播小按鈕現在繪製於盤面下方中央 ---
+        // --- 繪製重播小按鈕 ---
         function drawReplayButton(x, y, colorStr, isHovered) {
             const r = 24 * uiScale;
             replayBtnHitArea = { x, y, r };
-            ctx.save();
-            ctx.translate(x, y);
-            
-            // 背景圓
-            ctx.shadowBlur = isHovered ? 20 : 8;
-            ctx.shadowColor = `rgba(${colorStr}, 0.6)`;
+            ctx.save(); ctx.translate(x, y);
+            ctx.shadowBlur = isHovered ? 20 : 8; ctx.shadowColor = `rgba(${colorStr}, 0.6)`;
             ctx.fillStyle = isHovered ? `rgba(${colorStr}, 0.45)` : `rgba(${colorStr}, 0.25)`;
-            ctx.strokeStyle = `rgba(255, 255, 255, 0.85)`;
-            ctx.lineWidth = 2.0;
+            ctx.strokeStyle = `rgba(255, 255, 255, 0.85)`; ctx.lineWidth = 2.0;
             ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI*2); ctx.fill(); ctx.stroke();
-            
-            // 播放三角形
-            ctx.fillStyle = "#fff";
-            const triSize = r * 0.55;
-            ctx.beginPath();
-            ctx.moveTo(triSize * 0.6, 0);
-            ctx.lineTo(-triSize * 0.4, -triSize * 0.5);
-            ctx.lineTo(-triSize * 0.4, triSize * 0.5);
-            ctx.closePath();
-            ctx.fill();
-
-            // 「再聽一次」文字標註
-            ctx.font = `bold ${14 * uiScale}px sans-serif`;
-            ctx.textAlign = "center";
-            ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
+            ctx.fillStyle = "#fff"; const triSize = r * 0.55;
+            ctx.beginPath(); ctx.moveTo(triSize * 0.6, 0); ctx.lineTo(-triSize * 0.4, -triSize * 0.5); ctx.lineTo(-triSize * 0.4, triSize * 0.5); ctx.closePath(); ctx.fill();
+            ctx.font = `bold ${14 * uiScale}px sans-serif`; ctx.textAlign = "center"; ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
             ctx.fillText("再聽一次", 0, r + 22 * uiScale);
-
             ctx.restore();
         }
 
@@ -516,14 +543,9 @@
                     drawGeometry(ctx, renderType.id, node.x, node.y, iconSize, renderType.color, alpha, pulse, scale);
                 }
             }
-            
-            // 在中央提示文字下方繪製重播按鈕 (僅在反饋階段)
             if (isChallengeMode && (challengeState === 'feedback' || challengeState === 'replaying')) {
-                const btnX = centerX;
-                const btnY = centerY + 105 * uiScale; // 位於人頭中心點下方，避開文字
-                drawReplayButton(btnX, btnY, renderType.color, hoveredNodeIndex === 999);
+                drawReplayButton(centerX, centerY + 105 * uiScale, renderType.color, hoveredNodeIndex === 999);
             }
-
             requestAnimationFrame(animate);
         }
 
