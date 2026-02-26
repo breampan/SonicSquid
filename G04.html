@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>握力球聽能定向訓練系統</title>
+    <style>
+        body, html {
+            margin: 0; padding: 0; width: 100%; height: 100%;
+            overflow: hidden; background-color: #01050a;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            user-select: none; -webkit-user-select: none;
+            cursor: none; /* 隱藏系統預設游標，使用自訂的凝視準星 */
+        }
+        canvas { display: block; touch-action: none; cursor: none; }
+
+        /* 初始解鎖畫面 */
+        #unlock-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: #01050a; z-index: 1000; display: flex; flex-direction: column;
+            justify-content: center; align-items: center; color: #64dcff; cursor: pointer;
+        }
+        .pulse-circle {
+            width: 80px; height: 80px; border-radius: 50%; background: rgba(100, 220, 255, 0.2);
+            animation: pulse 1.5s infinite; margin-bottom: 20px; border: 2px solid #64dcff;
+        }
+        @keyframes pulse { 0% { transform: scale(0.9); box-shadow: 0 0 0 0 rgba(100, 220, 255, 0.7); } 70% { transform: scale(1.1); box-shadow: 0 0 0 20px rgba(100, 220, 255, 0); } 100% { transform: scale(0.9); box-shadow: 0 0 0 0 rgba(100, 220, 255, 0); } }
+
+        /* UI 介面 */
+        #controls-container {
+            position: absolute; bottom: 25px; left: 50%;
+            transform: translateX(-50%); display: flex; flex-direction: column; gap: 10px;
+            align-items: center; z-index: 100; max-width: 95vw; pointer-events: none; /* 讓事件穿透到自訂射線檢測 */
+        }
+        .control-group {
+            display: flex; gap: 8px; background: rgba(5, 15, 25, 0.6);
+            backdrop-filter: blur(25px); padding: 8px 15px; border-radius: 40px;
+            border: 1px solid rgba(100, 220, 255, 0.1); overflow-x: auto; pointer-events: auto;
+        }
+        .ctrl-btn {
+            background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.1);
+            color: rgba(200, 240, 255, 0.6); padding: 7px 14px; border-radius: 20px;
+            font-size: 13px; transition: all 0.3s; white-space: nowrap; cursor: none;
+        }
+        .ctrl-btn.active { background: rgba(100, 220, 255, 0.2); border-color: #64dcff; color: #fff; text-shadow: 0 0 8px rgba(100,220,255,0.5); }
+        .ctrl-btn.hovering { filter: brightness(1.5); }
+
+        #challenge-ui {
+            position: absolute; top: 25px; left: 20px;
+            display: flex; flex-direction: column; gap: 10px; z-index: 200; pointer-events: none;
+        }
+        .mode-selector { display: flex; flex-direction: column; gap: 8px; pointer-events: auto;}
+        .action-btn {
+            background: rgba(100, 220, 255, 0.15); border: 1px solid #64dcff;
+            color: #64dcff; padding: 12px 22px; border-radius: 30px;
+            font-weight: bold; font-size: 14px; letter-spacing: 1px;
+            transition: all 0.3s; box-shadow: 0 0 15px rgba(100, 220, 255, 0.1);
+            text-align: center; pointer-events: auto; cursor: none;
+        }
+        .action-btn.active { background: #64dcff; color: #01050a; }
+        .action-btn.hovering { filter: brightness(1.5) drop-shadow(0 0 10px #64dcff); }
+        
+        .score-panel { color: #64dcff; font-size: 18px; font-weight: bold; display: none; text-shadow: 0 0 10px rgba(100,220,255,0.5); }
+        .round-panel { color: #fff; font-size: 14px; display: none; opacity: 0.8; }
+
+        #center-hint {
+            position: absolute; top: 42%; left: 50%; transform: translate(-50%, -50%);
+            color: #fff; font-size: 20px; pointer-events: none; opacity: 0;
+            transition: opacity 0.5s; text-align: center; z-index: 50;
+            text-shadow: 0 0 20px rgba(100, 220, 255, 0.8); line-height: 1.6; width: 85%;
+        }
+        .feedback-score { font-size: 32px; font-weight: bold; color: #64dcff; margin-bottom: 5px; }
+
+        #end-modal {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(1, 5, 10, 0.85); backdrop-filter: blur(10px);
+            display: none; flex-direction: column; justify-content: center; align-items: center; z-index: 500; pointer-events: auto;
+        }
+        .end-title { font-size: 48px; color: #fff; margin-bottom: 10px; text-shadow: 0 0 30px rgba(100,220,255,0.8); }
+        .end-score { font-size: 80px; font-weight: bold; color: #64dcff; margin-bottom: 30px; text-shadow: 0 0 40px rgba(100,220,255,1); }
+    </style>
+</head>
+<body>
+
+    <!-- 啟動保護層 -->
+    <div id="unlock-overlay" onclick="unlockAudioAndStart()">
+        <div class="pulse-circle"></div>
+        <h2 style="letter-spacing: 2px;">系統準備就緒</h2>
+        <p style="opacity: 0.7;">請輕觸螢幕一次解鎖音訊，隨後即可全程使用握力球懸停控制</p>
+    </div>
+
+    <div id="challenge-ui">
+        <div id="mode-selection" class="mode-selector">
+            <button class="action-btn" id="btn-4" data-action="mode-4">4 方位設定</button>
+            <button class="action-btn" id="btn-8" data-action="mode-8">8 方位設定</button>
+            <button class="action-btn active" id="btn-12" data-action="mode-12">12 方位設定</button>
+            <button class="action-btn" style="margin-top: 10px; border-color: #fff; color: #fff;" data-action="start">開始五題定向挑戰</button>
+        </div>
+        
+        <button id="exit-btn" class="action-btn" style="display:none" data-action="exit">退出訓練模式</button>
+        <div id="round-display" class="round-panel">回合: 1 / 5</div>
+        <div id="score-display" class="score-panel">總積分: 0</div>
+    </div>
+
+    <div id="center-hint">請閉上眼聆聽...</div>
+
+    <div id="controls-container">
+        <div class="control-group" id="radius-controls">
+            <button class="ctrl-btn" data-action="rad-0.5">0.5m</button>
+            <button class="ctrl-btn active" data-action="rad-1.0">1.0m</button>
+            <button class="ctrl-btn" data-action="rad-2.0">2.0m</button>
+            <button class="ctrl-btn" data-action="rad-3.0">3.0m</button>
+        </div>
+        <div class="control-group" id="scene-controls">
+            <button class="ctrl-btn active" data-action="scene-bathroom">一般室內</button>
+            <button class="ctrl-btn" data-action="scene-station">車站大廳</button>
+            <button class="ctrl-btn" data-action="scene-cave">天然山洞</button>
+            <button class="ctrl-btn" data-action="scene-forest">戶外森林</button>
+        </div>
+    </div>
+
+    <div id="end-modal">
+        <div class="end-title">挑戰完成</div>
+        <div class="end-score" id="final-score-text">100</div>
+        <button class="action-btn" style="font-size: 18px; padding: 15px 40px;" data-action="exit">結束並返回沙盒</button>
+    </div>
+
+    <canvas id="appCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('appCanvas');
+        const ctx = canvas.getContext('2d');
+        let width, height, dpr, centerX, centerY;
+        let listenerPlaneY, uiScale, iconSize;
+        let displayRadiusX, displayRadiusY;
+
+        let audioCtx;
+        let convolver, masterDry, masterWet, masterCompressor;
+        
+        let currentScene = 'bathroom';
+        let currentRadius = 1.0;
+        let currentVisualFactor = 0.5;
+        let isChallengeMode = false;
+        
+        let activeSteps = 12;   
+        let challengeState = 'idle'; 
+        let currentRound = 1;
+        let totalScore = 0;
+        const MAX_ROUNDS = 5;
+        const CONSTANT_DURATION = 2.0;
+
+        let targetAngleDeg = 0;
+        let targetDistance = 1.0;
+        let targetType = null;
+
+        // --- 凝視懸停系統 (Dwell System) ---
+        let pointerX = window.innerWidth / 2;
+        let pointerY = window.innerHeight / 2;
+        let hoverTarget = null;         // 當前懸停的目標 (物件結構)
+        let hoverStartTime = 0;         // 懸停開始時間
+        let hasTriggered = false;       // 是否已經觸發過 (防連發)
+        const DWELL_DURATION = 1200;    // 懸停觸發所需時間 (毫秒)
+        
+        let replayBtnHitArea = { x: 0, y: 0, r: 0 };
+        let nextBtnHitArea = { x: 0, y: 0, r: 0 };
+
+        const SCENE_KEYS = ['bathroom', 'station', 'cave', 'forest'];
+        const DISTANCES = [0.5, 1.0, 2.0, 3.0];
+        const SCENE_CONFIG = {
+            bathroom: { main: '#00ccff', bg: '#021020', gridAlpha: 0.05, flow: 1.0, length: 0.5, decay: 12.0, lp: 12000, dry: 0.7, wet: 0.5 },
+            station: { main: '#ffaa44', bg: '#150a02', gridAlpha: 0.08, flow: 0.35, length: 5.5, decay: 1.2, lp: 6000, dry: 0.5, wet: 0.7 },
+            cave: { main: '#bb66ff', bg: '#0a0215', gridAlpha: 0.04, flow: 0.2, length: 3.5, decay: 2.5, lp: 800, dry: 0.4, wet: 0.8 },
+            forest: { main: '#44ffaa', bg: '#02150a', gridAlpha: 0.06, flow: 0.65, length: 2.2, decay: 4.0, lp: 3000, dry: 0.8, wet: 0.3 }
+        };
+
+        const WAVE_TYPES = {
+            SINE: { id: 'sine', color: '100, 220, 255', norm: 0.85 },
+            TRIANGLE: { id: 'triangle', color: '255, 204, 170', norm: 0.75 },
+            NOISE: { id: 'noise', color: '160, 255, 170', norm: 1.25 },
+            BOATMAN: { id: 'boatman', color: '255, 85, 68', norm: 0.95 }
+        };
+
+        const BASE_ANGLES = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330];
+        let clockNodes = [];
+        let activeSoundType = WAVE_TYPES.SINE;
+        let paletteIcons = [];
+        let noiseBuffer = null;
+        let audioPlayer = null; 
+
+        // --- 初始化解鎖 ---
+        window.unlockAudioAndStart = () => {
+            document.getElementById('unlock-overlay').style.display = 'none';
+            initAudio();
+        };
+
+        class AmbianceManager {
+            constructor() {
+                this.audio = new Audio(); this.audio.loop = true; this.audio.volume = 0;
+                this.urls = {
+                    bathroom: "https://cdn.pixabay.com/audio/2022/03/15/audio_7314275f3a.mp3",
+                    station:  "https://cdn.pixabay.com/audio/2022/01/18/audio_247cd51480.mp3",
+                    cave:     "https://cdn.pixabay.com/audio/2021/08/09/audio_b298495bc2.mp3",
+                    forest:   "https://cdn.pixabay.com/audio/2021/09/06/audio_99c3ed0378.mp3"
+                };
+            }
+            playScene(scene) {
+                const targetUrl = this.urls[scene]; if (!targetUrl || this.currentUrl === targetUrl) return;
+                this.currentUrl = targetUrl; if (this.fadeTimeout) clearTimeout(this.fadeTimeout);
+                const fadeOut = () => {
+                    if (this.audio.volume > 0.02) { this.audio.volume -= 0.02; this.fadeTimeout = setTimeout(fadeOut, 30); }
+                    else { this.audio.volume = 0; this.audio.pause(); this.audio.src = targetUrl; this.audio.play().then(() => { fadeIn(); }).catch(e => {}); }
+                };
+                const fadeIn = () => {
+                    if (this.audio.volume < 0.12) { this.audio.volume = Math.min(0.12, this.audio.volume + 0.01); this.fadeTimeout = setTimeout(fadeIn, 40); }
+                };
+                if (!this.audio.paused && this.audio.src) fadeOut(); else { this.audio.src = targetUrl; this.audio.play().then(() => { fadeIn(); }).catch(e => {}); }
+            }
+        }
+        let ambianceManager = null;
+
+        function initAudio() {
+            if (!ambianceManager) { ambianceManager = new AmbianceManager(); ambianceManager.playScene(currentScene); }
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                masterCompressor = audioCtx.createDynamicsCompressor();
+                masterCompressor.threshold.setTargetAtTime(-24, audioCtx.currentTime, 0.1);
+                masterCompressor.connect(audioCtx.destination);
+                convolver = audioCtx.createConvolver();
+                masterDry = audioCtx.createGain(); masterWet = audioCtx.createGain();
+                masterDry.gain.value = 0.0001; masterWet.gain.value = 0.0001;
+                masterDry.connect(masterCompressor); convolver.connect(masterWet); masterWet.connect(masterCompressor);
+                const bufferSize = audioCtx.sampleRate * 2; 
+                noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+                const output = noiseBuffer.getChannelData(0);
+                for (let i = 0; i < bufferSize; i++) output[i] = Math.random() * 2 - 1;
+                applySceneAudio(currentScene);
+            }
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+        }
+
+        function applySceneAudio(scene) {
+            if (!audioCtx) return;
+            const cfg = SCENE_CONFIG[scene];
+            const sampleRate = audioCtx.sampleRate;
+            const frameCount = Math.floor(sampleRate * cfg.length);
+            const buffer = audioCtx.createBuffer(2, frameCount, sampleRate);
+            const filterAlpha = Math.min(1.0, (2 * Math.PI * cfg.lp) / sampleRate);
+            for (let ch = 0; ch < 2; ch++) {
+                const data = buffer.getChannelData(ch); let lastVal = 0;
+                for (let i = 0; i < frameCount; i++) {
+                    let iTime = i / sampleRate; lastVal += filterAlpha * ((Math.random() * 2 - 1) - lastVal); data[i] = lastVal * Math.exp(-cfg.decay * iTime) * 0.45;
+                }
+            }
+            const now = audioCtx.currentTime;
+            masterWet.gain.cancelScheduledValues(now); masterWet.gain.linearRampToValueAtTime(0.0001, now + 0.05);
+            masterDry.gain.cancelScheduledValues(now); masterDry.gain.linearRampToValueAtTime(cfg.dry, now + 0.1);
+            setTimeout(() => { if (!convolver) return; convolver.buffer = buffer; masterWet.gain.linearRampToValueAtTime(cfg.wet, audioCtx.currentTime + 0.1); }, 60);
+        }
+        
+        function getRadiusFactor(dist) { if (dist <= 0.5) return 0.25; if (dist <= 1.0) return 0.50; if (dist <= 2.0) return 0.75; return 1.0; }
+
+        class DirectionalPlayer {
+            constructor() { this.source = null; this.modulator = null; this.lfo = null; this.gain = null; this.panner = null; }
+            play(typeConfig, angleDeg, distance, duration = CONSTANT_DURATION) {
+                if (!audioCtx) return; this.stop(); 
+                const now = audioCtx.currentTime;
+                this.gain = audioCtx.createGain(); this.panner = audioCtx.createPanner();
+                const air = audioCtx.createBiquadFilter(); air.type = 'lowpass';
+                const pinna = audioCtx.createBiquadFilter(); pinna.type = 'highshelf';
+                this.panner.panningModel = (typeConfig.id === 'sine') ? 'equalpower' : 'HRTF';
+                this.panner.distanceModel = 'inverse'; this.panner.refDistance = 1.0; this.panner.rolloffFactor = 1.8;   
+                const rad = angleDeg * Math.PI / 180;
+                this.panner.positionX.value = Math.sin(rad) * distance * 2.5; 
+                this.panner.positionZ.value = -Math.cos(rad) * distance * 2.5;
+                air.frequency.value = Math.max(400, 20000 - (distance * 3500));
+                pinna.gain.value = this.panner.positionZ.value < 0 ? 3.5 : -9.0; 
+                
+                const attackTime = 0.05; const releaseTime = 0.15;  
+                const end = now + duration; let targetVol = 0.4 * (typeConfig.norm || 1.0); 
+
+                this.gain.gain.setValueAtTime(0, now);
+                this.gain.gain.linearRampToValueAtTime(targetVol, now + attackTime);
+                this.gain.gain.setValueAtTime(targetVol, Math.max(now + attackTime, end - releaseTime));
+                this.gain.gain.linearRampToValueAtTime(0, end);
+
+                if (typeConfig.id === 'sine' || typeConfig.id === 'triangle') {
+                    this.source = audioCtx.createOscillator(); this.modulator = audioCtx.createOscillator(); this.modGain = audioCtx.createGain();
+                    this.source.type = typeConfig.id; this.modulator.type = 'sine'; this.modulator.connect(this.modGain); this.modGain.connect(this.source.frequency);
+                    this.source.connect(pinna); this.modulator.frequency.value = 0.5 + Math.abs(this.panner.positionX.value) * 10;
+                    this.modGain.gain.value = Math.max(0, (1 - distance/4) * (typeConfig.id === 'sine' ? 120 : 250));
+                    this.source.frequency.value = 180 + Math.max(0, 1 - (distance/3)) * 300;
+                    this.modulator.start(now); this.modulator.stop(end);
+                } else if (typeConfig.id === 'noise') {
+                    this.source = audioCtx.createBufferSource(); this.source.buffer = noiseBuffer; this.source.loop = true;
+                    const filter = audioCtx.createBiquadFilter(); filter.type = 'bandpass'; 
+                    filter.Q.value = Math.max(1.5, 25 - (distance * 6)); filter.frequency.value = 4200 - (distance * 600);
+                    this.source.connect(filter); filter.connect(pinna);
+                } else if (typeConfig.id === 'boatman') {
+                    this.source = audioCtx.createOscillator(); this.source.type = 'sawtooth'; this.source.frequency.value = 3800;
+                    this.lfo = audioCtx.createOscillator(); this.lfo.type = 'square'; this.lfo.frequency.value = 15;
+                    const lfoG = audioCtx.createGain(); lfoG.gain.value = 0.5;
+                    const off = audioCtx.createConstantSource(); off.offset.value = 0.5; off.start();
+                    this.lfo.connect(lfoG); off.connect(lfoG.gain);
+                    const pg = audioCtx.createGain(); this.source.connect(pg); lfoG.connect(pg.gain); pg.connect(pinna);
+                    this.lfo.start(now); this.lfo.stop(end);
+                }
+                pinna.connect(air); air.connect(this.panner); this.panner.connect(this.gain); this.gain.connect(masterDry); this.gain.connect(convolver);
+                this.source.start(now); this.source.stop(end);
+                setTimeout(() => { if (this.gain) { this.gain.disconnect(); this.gain = null; } }, duration * 1000 + 200);
+            }
+            stop() {
+                if (!this.gain || !this.source) return;
+                const now = audioCtx.currentTime; 
+                this.gain.gain.cancelScheduledValues(now); this.gain.gain.linearRampToValueAtTime(0, now + 0.03); 
+                const _s = this.source; const _m = this.modulator; const _l = this.lfo;
+                setTimeout(() => { try{ if(_s) _s.stop(); if(_m) _m.stop(); if(_l) _l.stop(); }catch(e){} }, 40);
+                this.source = null; this.gain = null;
+            }
+        }
+
+        // --- 核心邏輯派發器 ---
+        function executeAction(actionStr) {
+            initAudio(); // 確保已喚醒
+            if (actionStr.startsWith('mode-')) {
+                const steps = parseInt(actionStr.split('-')[1]);
+                if (!isChallengeMode) {
+                    activeSteps = steps;
+                    document.querySelectorAll('.mode-selector .action-btn').forEach(b => b.classList.remove('active'));
+                    document.getElementById(`btn-${steps}`).classList.add('active');
+                }
+            } else if (actionStr === 'start') {
+                if (audioPlayer) audioPlayer.stop();
+                isChallengeMode = true; 
+                document.getElementById('mode-selection').style.display = "none"; document.getElementById('exit-btn').style.display = "block";
+                document.getElementById('score-display').style.display = "block"; document.getElementById('round-display').style.display = "block";
+                document.getElementById('radius-controls').style.display = "none";
+                totalScore = 0; currentRound = 1; document.getElementById('score-display').innerText = `總積分: 0`; document.getElementById('round-display').innerText = `回合: 1 / 5`;
+                challengeState = 'preparing'; 
+                document.getElementById('center-hint').innerHTML = `準備好了嗎？<br><span style='font-size:16px; color:#fff'>懸停此處開始 ${activeSteps} 方位挑戰</span>`;
+                document.getElementById('center-hint').style.opacity = 1;
+                // 更新 Next 按鈕的感應區 (居中)
+                nextBtnHitArea = { x: centerX, y: centerY, r: 80 * uiScale };
+            } else if (actionStr === 'exit') {
+                isChallengeMode = false;
+                document.getElementById('mode-selection').style.display = "flex"; document.getElementById('exit-btn').style.display = "none";
+                document.getElementById('score-display').style.display = "none"; document.getElementById('round-display').style.display = "none";
+                document.getElementById('radius-controls').style.display = "flex"; document.getElementById('center-hint').style.opacity = 0;
+                document.getElementById('end-modal').style.display = "none"; challengeState = 'idle';
+            } else if (actionStr.startsWith('rad-')) {
+                if (!isChallengeMode) {
+                    currentRadius = parseFloat(actionStr.split('-')[1]);
+                    document.querySelectorAll('#radius-controls .ctrl-btn').forEach(btn => {
+                        btn.classList.remove('active'); if(btn.innerText.includes(currentRadius.toString())) btn.classList.add('active');
+                    });
+                }
+            } else if (actionStr.startsWith('scene-')) {
+                const s = actionStr.split('-')[1];
+                currentScene = s; if (ambianceManager) ambianceManager.playScene(s); applySceneAudio(s);
+                document.querySelectorAll('#scene-controls .ctrl-btn').forEach(b => { b.classList.remove('active'); });
+                const mapping = { 'bathroom': '一般室內', 'station': '車站大廳', 'cave': '天然山洞', 'forest': '戶外森林' };
+                document.querySelectorAll('#scene-controls .ctrl-btn').forEach(b => { if(b.innerText.includes(mapping[s])) b.classList.add('active'); });
+            } else if (actionStr === 'next_round' || actionStr === 'start_play') {
+                if (currentRound > MAX_ROUNDS && challengeState === 'feedback') {
+                    challengeState = 'finished'; document.getElementById('center-hint').style.opacity = 0;
+                    document.getElementById('final-score-text').innerText = totalScore; document.getElementById('end-modal').style.display = "flex"; return;
+                }
+                if (challengeState === 'feedback') {
+                    currentRound++; document.getElementById('round-display').innerText = `回合: ${currentRound} / 5`;
+                }
+                challengeState = 'listening'; guessIndex = -1;
+                document.getElementById('center-hint').innerHTML = "請閉上眼，專注聆聽..."; document.getElementById('center-hint').style.opacity = 1;
+                const stepDeg = 360 / activeSteps; targetAngleDeg = Math.floor(Math.random() * activeSteps) * stepDeg;
+                targetDistance = DISTANCES[Math.floor(Math.random() * DISTANCES.length)];
+                targetType = Object.values(WAVE_TYPES)[Math.floor(Math.random() * 4)];
+                targetScene = SCENE_KEYS[Math.floor(Math.random() * SCENE_KEYS.length)]; setScene(targetScene);
+                if (!audioPlayer) audioPlayer = new DirectionalPlayer();
+                audioPlayer.play(targetType, targetAngleDeg, targetDistance, CONSTANT_DURATION);
+                setTimeout(() => { if (challengeState !== 'listening') return; challengeState = 'guessing'; document.getElementById('center-hint').innerHTML = "聲音來自哪個方位？<br><span style='font-size:16px; color:#fff'>請懸停在對應的圖示上</span>"; }, CONSTANT_DURATION * 1000 + 100);
+            } else if (actionStr === 'replay_sound') {
+                if (!audioPlayer) audioPlayer = new DirectionalPlayer();
+                audioPlayer.play(targetType, targetAngleDeg, targetDistance, CONSTANT_DURATION);
+                if (challengeState === 'feedback') {
+                    challengeState = 'replaying'; setTimeout(() => { if(challengeState === 'replaying') challengeState = 'feedback'; }, CONSTANT_DURATION * 1000 + 100);
+                }
+            } else if (actionStr.startsWith('guess-')) {
+                const angleIndex = parseInt(actionStr.split('-')[1]);
+                const stepDeg = 360 / activeSteps; const guessedAngle = angleIndex * stepDeg;
+                guessIndex = angleIndex; challengeState = 'feedback';
+                let diff = Math.abs(guessedAngle - targetAngleDeg); if (diff > 180) diff = 360 - diff;
+                let roundScore = 0; let feedbackText = ""; let color = "#fff";
+                if (diff < 1) { roundScore = 20; feedbackText = "完全命中！精確的空間感"; color = "#44ffaa"; }
+                else if (diff <= 45) { roundScore = 15; feedbackText = "非常接近，有些微偏差"; color = "#10dcff"; }
+                else if (diff <= 90) { roundScore = 10; feedbackText = "方向大致正確，繼續保持"; color = "#ffaa44"; }
+                else if (diff <= 135) { roundScore = 5; feedbackText = "略有偏離，注意濾波差異"; color = "#ff7744"; }
+                else { roundScore = 0; feedbackText = "完全相反囉！可懸停下方重播"; color = "#ff4444"; }
+                totalScore += roundScore; document.getElementById('score-display').innerText = `總積分: ${totalScore}`;
+                const nextT = (currentRound >= MAX_ROUNDS) ? "懸停此處看總結算" : "懸停此處進入下一題";
+                document.getElementById('center-hint').innerHTML = `<div class="feedback-score" style="color:${color}">+${roundScore} 分</div>${feedbackText}<br><span style='font-size:16px; color:#fff'>${nextT}</span>`;
+                nextBtnHitArea = { x: centerX, y: centerY - 20 * uiScale, r: 70 * uiScale };
+            } else if (actionStr.startsWith('palette-')) {
+                const pId = actionStr.split('-')[1];
+                const typeInfo = Object.values(WAVE_TYPES).find(t => t.id === pId);
+                if (typeInfo) activeSoundType = typeInfo;
+            } else if (actionStr.startsWith('playnode-')) {
+                const idx = parseInt(actionStr.split('-')[1]);
+                if (!audioPlayer) audioPlayer = new DirectionalPlayer(); 
+                audioPlayer.play(activeSoundType, idx * (360/activeSteps), currentRadius, CONSTANT_DURATION);
+            }
+        }
+
+        // --- 視覺渲染 ---
+        function initLayout() {
+            dpr = window.devicePixelRatio || 1; width = window.innerWidth; height = window.innerHeight;
+            canvas.width = width * dpr; canvas.height = height * dpr; canvas.style.width = width + 'px'; canvas.style.height = height + 'px';
+            ctx.scale(dpr, dpr); centerX = width / 2; listenerPlaneY = height * 0.48; centerY = listenerPlaneY;
+            uiScale = Math.min(1.0, width / 1000) + 0.2; iconSize = Math.max(16, Math.min(28, width * 0.05));
+            displayRadiusX = Math.min(width * 0.4, height * 0.38); displayRadiusY = displayRadiusX * 0.75; 
+            const paletteX = width - iconSize * 2.0;
+            paletteIcons = [{ typeConfig: WAVE_TYPES.SINE, x: width - iconSize * 2.5, y: height * 0.25 }, { typeConfig: WAVE_TYPES.TRIANGLE, x: width - iconSize * 2.5, y: height * 0.40 }, { typeConfig: WAVE_TYPES.NOISE, x: width - iconSize * 2.5, y: height * 0.55 }, { typeConfig: WAVE_TYPES.BOATMAN, x: width - iconSize * 2.5, y: height * 0.70 }];
+        }
+
+        function drawBackground() {
+            const cfg = SCENE_CONFIG[currentScene];
+            const t = Date.now() * 0.001 * cfg.flow;
+            const bgGrad = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, height * 1.1);
+            bgGrad.addColorStop(0, cfg.bg); bgGrad.addColorStop(1, '#000000');
+            ctx.fillStyle = bgGrad; ctx.fillRect(0, 0, width, height);
+            ctx.lineWidth = 1; ctx.strokeStyle = cfg.main + '22';
+            const bgSteps = isChallengeMode ? activeSteps : (hoverTarget && hoverTarget.action && hoverTarget.action.startsWith('mode-') ? parseInt(hoverTarget.action.split('-')[1]) : activeSteps);
+            for (let i = 0; i < bgSteps; i++) { const rad = (i * (360 / bgSteps)) * Math.PI / 180; ctx.beginPath(); ctx.moveTo(centerX, centerY); ctx.lineTo(centerX + Math.sin(rad) * width, centerY - Math.cos(rad) * height); ctx.stroke(); }
+            for (let r = 1; r <= 4; r++) { ctx.beginPath(); ctx.ellipse(centerX, centerY, displayRadiusX * (r/4), displayRadiusY * (r/4), 0, 0, Math.PI * 2); ctx.stroke(); }
+            ctx.save(); ctx.shadowBlur = 20; ctx.shadowColor = cfg.main + '55'; ctx.fillStyle = cfg.main + '33'; ctx.strokeStyle = cfg.main + 'aa';
+            ctx.beginPath(); ctx.ellipse(centerX, centerY + 5, 24, 10, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+            ctx.beginPath(); ctx.arc(centerX, centerY - 8, 10, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); ctx.restore();
+        }
+
+        function drawGeometry(ctx, type, x, y, baseSize, rgbStr, alpha = 1.0, pulse = 0, extraScale = 1.0) {
+            const breath = 1.0 + Math.sin(pulse * 2.5) * 0.08;
+            let currentSize = baseSize * extraScale * breath; if (type === 'sine' || type === 'triangle') currentSize *= 1.25; 
+            ctx.save(); ctx.translate(x, y); 
+            const glow = ctx.createRadialGradient(0, 0, 0, 0, 0, currentSize * 3);
+            glow.addColorStop(0, `rgba(${rgbStr}, ${alpha * 0.5})`); glow.addColorStop(1, 'transparent');
+            ctx.fillStyle = glow; ctx.beginPath(); ctx.arc(0, 0, currentSize * 3, 0, Math.PI * 2); ctx.fill();
+            ctx.fillStyle = `rgba(${rgbStr}, ${alpha})`; ctx.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.9})`; ctx.lineWidth = 2.0;
+            if (type === 'sine') { const r = Math.max(0.1, currentSize * 0.65); ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); ctx.rotate(pulse * 0.5); ctx.beginPath(); ctx.arc(currentSize * 0.4, 0, Math.max(0.1, currentSize * 0.35), 0, Math.PI * 2); ctx.stroke(); }
+            else if (type === 'triangle') { ctx.save(); ctx.rotate(pulse * 0.15); const s1 = currentSize * 1.2; ctx.beginPath(); ctx.moveTo(0, -s1); ctx.lineTo(s1, s1 * 0.8); ctx.lineTo(-s1, s1 * 0.8); ctx.closePath(); ctx.stroke(); ctx.restore(); ctx.save(); ctx.rotate(-pulse * 0.4); const s2 = s1 * 0.6; ctx.beginPath(); ctx.moveTo(0, s2); ctx.lineTo(s2, -s2 * 0.8); ctx.lineTo(-s2, -s2 * 0.8); ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.restore(); }
+            else if (type === 'noise') { ctx.beginPath(); for (let i = 0; i < 12; i++) { let r = currentSize * (0.8 + Math.random() * 0.3); let a = (i / 12) * Math.PI * 2; ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r); } ctx.closePath(); ctx.fill(); ctx.stroke(); }
+            else if (type === 'boatman') { ctx.rotate(pulse * 0.2); const s = currentSize * 0.9; const paddle = Math.sin(pulse * 4) * 0.3; ctx.beginPath(); ctx.moveTo(0, -s); ctx.lineTo(s * 0.6, 0); ctx.lineTo(0, s); ctx.lineTo(-s * 0.6, 0); ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.beginPath(); ctx.moveTo(s * 0.4, -s * 0.3); ctx.lineTo(s * (1.2 + paddle), -s * 0.8); ctx.moveTo(-s * 0.4, -s * 0.3); ctx.lineTo(-s * (1.2 + paddle), -s * 0.8); ctx.stroke(); }
+            ctx.restore();
+        }
+
+        function drawReplayButton(x, y, colorStr, isHovered) {
+            const r = 24 * uiScale; replayBtnHitArea = { x, y, r };
+            ctx.save(); ctx.translate(x, y);
+            ctx.shadowBlur = isHovered ? 20 : 8; ctx.shadowColor = `rgba(${colorStr}, 0.6)`;
+            ctx.fillStyle = isHovered ? `rgba(${colorStr}, 0.45)` : `rgba(${colorStr}, 0.25)`;
+            ctx.strokeStyle = `rgba(255, 255, 255, 0.85)`; ctx.lineWidth = 2.0;
+            ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+            ctx.fillStyle = "#fff"; const triSize = r * 0.55;
+            ctx.beginPath(); ctx.moveTo(triSize * 0.6, 0); ctx.lineTo(-triSize * 0.4, -triSize * 0.5); ctx.lineTo(-triSize * 0.4, triSize * 0.5); ctx.closePath(); ctx.fill();
+            ctx.font = `bold ${14 * uiScale}px sans-serif`; ctx.textAlign = "center"; ctx.fillStyle = "rgba(255, 255, 255, 0.9)"; ctx.fillText("再聽一次", 0, r + 22 * uiScale); ctx.restore();
+        }
+
+        // --- 核心：繪製游標與凝視進度環 ---
+        function drawHoverCursor() {
+            ctx.save();
+            ctx.translate(pointerX, pointerY);
+            
+            // 基礎準星
+            ctx.strokeStyle = "rgba(100, 220, 255, 0.8)";
+            ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.arc(0, 0, 8, 0, Math.PI*2); ctx.stroke();
+            ctx.beginPath(); ctx.arc(0, 0, 2, 0, Math.PI*2); ctx.fillStyle="#fff"; ctx.fill();
+
+            // 凝視進度條
+            if (hoverTarget && !hasTriggered) {
+                const elapsed = Date.now() - hoverStartTime;
+                const progress = Math.min(1.0, Math.max(0, elapsed / DWELL_DURATION));
+                
+                ctx.strokeStyle = "#44ffaa";
+                ctx.lineWidth = 4;
+                ctx.lineCap = "round";
+                ctx.beginPath();
+                ctx.arc(0, 0, 16, -Math.PI/2, -Math.PI/2 + (Math.PI * 2 * progress));
+                ctx.stroke();
+
+                // 觸發瞬間特效
+                if (progress >= 1.0) {
+                    hasTriggered = true;
+                    executeAction(hoverTarget.action);
+                    
+                    // 擴散波紋特效
+                    ctx.beginPath(); ctx.arc(0, 0, 30, 0, Math.PI*2);
+                    ctx.fillStyle = "rgba(68, 255, 170, 0.4)"; ctx.fill();
+                }
+            }
+            ctx.restore();
+        }
+
+        function checkHoverTargets() {
+            let newTarget = null;
+            
+            // 1. 檢查 HTML UI 元件 (透過 getBoundingClientRect 映射至 Canvas)
+            const htmlBtns = document.querySelectorAll('button:not([style*="display: none"]):not([style*="display:none"])');
+            for (let btn of htmlBtns) {
+                // 檢查父元素是否也被隱藏
+                if (btn.parentElement && window.getComputedStyle(btn.parentElement).display === 'none') continue;
+                
+                const rect = btn.getBoundingClientRect();
+                if (pointerX >= rect.left && pointerX <= rect.right && pointerY >= rect.top && pointerY <= rect.bottom) {
+                    newTarget = { type: 'html', el: btn, action: btn.getAttribute('data-action') };
+                    btn.classList.add('hovering');
+                    break;
+                } else {
+                    btn.classList.remove('hovering');
+                }
+            }
+
+            // 2. 檢查 Canvas 內部虛擬元件
+            if (!newTarget) {
+                // 檢查重播按鈕
+                if (isChallengeMode && (challengeState === 'feedback' || challengeState === 'replaying')) {
+                    if (Math.sqrt((pointerX - replayBtnHitArea.x)**2 + (pointerY - replayBtnHitArea.y)**2) < replayBtnHitArea.r) {
+                        newTarget = { type: 'canvas', action: 'replay_sound' };
+                    }
+                }
+                
+                // 檢查中央區域 (進入下一題 / 開始測驗)
+                if (isChallengeMode) {
+                    if (challengeState === 'feedback' && Math.sqrt((pointerX - nextBtnHitArea.x)**2 + (pointerY - nextBtnHitArea.y)**2) < nextBtnHitArea.r) {
+                        newTarget = { type: 'canvas', action: 'next_round' };
+                    }
+                    if (challengeState === 'preparing' && Math.sqrt((pointerX - centerX)**2 + (pointerY - centerY)**2) < 80 * uiScale) {
+                        newTarget = { type: 'canvas', action: 'start_play' };
+                    }
+                }
+
+                // 檢查調色盤 (僅沙盒)
+                if (!newTarget && !isChallengeMode) {
+                    for (let i = 0; i < paletteIcons.length; i++) {
+                        const p = paletteIcons[i];
+                        if (Math.sqrt((pointerX - p.x)**2 + (pointerY - p.y)**2) < 45 * uiScale) {
+                            newTarget = { type: 'canvas', action: `palette-${p.typeConfig.id}` };
+                            break;
+                        }
+                    }
+                }
+
+                // 檢查方位節點
+                if (!newTarget && (!isChallengeMode || challengeState === 'guessing')) {
+                    const stepAngle = 360 / activeSteps;
+                    for (let i = 0; i < activeSteps; i++) {
+                        const rad = (i * stepAngle) * Math.PI / 180;
+                        const nx = centerX + Math.sin(rad) * displayRadiusX * currentVisualFactor;
+                        const ny = centerY - Math.cos(rad) * displayRadiusY * currentVisualFactor;
+                        if (Math.sqrt((pointerX - nx)**2 + (pointerY - ny)**2) < 45 * uiScale) {
+                            newTarget = { type: 'canvas', action: isChallengeMode ? `guess-${i}` : `playnode-${i}` };
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // 狀態機更新
+            if (newTarget) {
+                if (!hoverTarget || hoverTarget.action !== newTarget.action) {
+                    hoverTarget = newTarget;
+                    hoverStartTime = Date.now();
+                    hasTriggered = false; // 進入新目標，重置觸發鎖
+                }
+            } else {
+                hoverTarget = null;
+                hasTriggered = false; // 移出目標，解開觸發鎖
+            }
+        }
+
+        function animate() {
+            // 更新懸停檢測
+            checkHoverTargets();
+
+            let targetActiveDist = 1.0;
+            if (isChallengeMode) { if (challengeState === 'idle' || challengeState === 'preparing') targetActiveDist = 3.0; else targetActiveDist = targetDistance; }
+            else { targetActiveDist = currentRadius; }
+            currentVisualFactor += (getRadiusFactor(targetActiveDist) - currentVisualFactor) * 0.12; 
+            
+            drawBackground();
+            const now = Date.now(); const pulse = now * 0.002;
+            paletteIcons.forEach(p => { const isActive = (!isChallengeMode && p.typeConfig.id === activeSoundType.id); drawGeometry(ctx, p.typeConfig.id, p.x, p.y, iconSize, p.typeConfig.color, isActive ? 1.0 : 0.4, pulse, isActive ? 1.2 : 1.0); if (isActive) { ctx.strokeStyle = `rgba(${p.typeConfig.color}, 0.8)`; ctx.beginPath(); ctx.arc(p.x, p.y, iconSize * 2, 0, Math.PI*2); ctx.stroke(); } });
+            
+            const renderType = isChallengeMode ? targetType : activeSoundType;
+            if (renderType) {
+                const stepAngle = 360 / activeSteps;
+                for (let i = 0; i < activeSteps; i++) {
+                    const angle = i * stepAngle; const rad = angle * Math.PI / 180;
+                    const nodeX = centerX + Math.sin(rad) * displayRadiusX * currentVisualFactor;
+                    const nodeY = centerY - Math.cos(rad) * displayRadiusY * currentVisualFactor;
+                    let alpha = 0.2; let scale = 0.8;
+                    const isNodeHovered = (hoverTarget && hoverTarget.action && hoverTarget.action.includes(`-${i}`));
+                    
+                    if (isChallengeMode) {
+                        if (challengeState === 'listening') alpha = 0.05;
+                        else if (challengeState === 'guessing') { alpha = 0.35; if (isNodeHovered) { alpha = 0.9; scale = 1.15 + 0.1 * Math.sin(now / 150); } }
+                        else if (challengeState === 'feedback' || challengeState === 'replaying') { if (Math.abs(angle - targetAngleDeg) < 0.1) { alpha = 1.0; scale = 1.3; ctx.beginPath(); const beam = ctx.createLinearGradient(centerX, centerY, nodeX, nodeY); beam.addColorStop(0, 'rgba(100, 220, 255, 0.1)'); beam.addColorStop(1, `rgba(${renderType.color}, 0.9)`); ctx.strokeStyle = beam; ctx.lineWidth = 3; ctx.moveTo(centerX, centerY); ctx.lineTo(nodeX, nodeY); ctx.stroke(); } else if (i === guessIndex) { alpha = 0.8; ctx.fillStyle = "#ff4444"; ctx.shadowBlur = 15; ctx.shadowColor = "#ff0000"; ctx.beginPath(); ctx.arc(nodeX, nodeY, 8, 0, Math.PI*2); ctx.fill(); ctx.shadowBlur = 0; } else alpha = 0.15; }
+                    } else { if (isNodeHovered) { alpha = 0.9; scale = 1.15 + 0.1 * Math.sin(now / 150); } else alpha = 0.4; }
+                    drawGeometry(ctx, renderType.id, nodeX, nodeY, iconSize, renderType.color, alpha, pulse, scale);
+                }
+            }
+            if (isChallengeMode && (challengeState === 'feedback' || challengeState === 'replaying')) { drawReplayButton(centerX, centerY + 105 * uiScale, renderType.color, hoverTarget && hoverTarget.action === 'replay_sound'); }
+            
+            // 繪製頂層準星
+            drawHoverCursor();
+            
+            requestAnimationFrame(animate);
+        }
+
+        // 全局擷取指標座標 (握力球輸入)
+        window.addEventListener('pointermove', (e) => {
+            pointerX = e.clientX;
+            pointerY = e.clientY;
+        });
+
+        window.addEventListener('resize', initLayout); initLayout(); animate();
+    </script>
+</body>
+</html>
