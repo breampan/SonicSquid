@@ -14,6 +14,12 @@
         }
         canvas { display: block; touch-action: none; cursor: none; }
 
+        /* 頂層游標畫布：設定極高 z-index 並允許事件穿透 */
+        #cursorCanvas {
+            position: absolute; top: 0; left: 0;
+            z-index: 9999; pointer-events: none;
+        }
+
         /* 初始解鎖畫面 */
         #unlock-overlay {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
@@ -30,7 +36,7 @@
         #controls-container {
             position: absolute; bottom: 25px; left: 50%;
             transform: translateX(-50%); display: flex; flex-direction: column; gap: 10px;
-            align-items: center; z-index: 100; max-width: 95vw; pointer-events: none; /* 讓事件穿透到自訂射線檢測 */
+            align-items: center; z-index: 100; max-width: 95vw; pointer-events: none;
         }
         .control-group {
             display: flex; gap: 8px; background: rgba(5, 15, 25, 0.6);
@@ -125,10 +131,14 @@
     </div>
 
     <canvas id="appCanvas"></canvas>
+    <canvas id="cursorCanvas"></canvas>
 
     <script>
         const canvas = document.getElementById('appCanvas');
         const ctx = canvas.getContext('2d');
+        const cursorCanvas = document.getElementById('cursorCanvas');
+        const cursorCtx = cursorCanvas.getContext('2d');
+        
         let width, height, dpr, centerX, centerY;
         let listenerPlaneY, uiScale, iconSize;
         let displayRadiusX, displayRadiusY;
@@ -152,13 +162,12 @@
         let targetDistance = 1.0;
         let targetType = null;
 
-        // --- 凝視懸停系統 (Dwell System) ---
         let pointerX = window.innerWidth / 2;
         let pointerY = window.innerHeight / 2;
-        let hoverTarget = null;         // 當前懸停的目標 (物件結構)
-        let hoverStartTime = 0;         // 懸停開始時間
-        let hasTriggered = false;       // 是否已經觸發過 (防連發)
-        const DWELL_DURATION = 1200;    // 懸停觸發所需時間 (毫秒)
+        let hoverTarget = null;         
+        let hoverStartTime = 0;         
+        let hasTriggered = false;       
+        const DWELL_DURATION = 1200;    
         
         let replayBtnHitArea = { x: 0, y: 0, r: 0 };
         let nextBtnHitArea = { x: 0, y: 0, r: 0 };
@@ -179,14 +188,11 @@
             BOATMAN: { id: 'boatman', color: '255, 85, 68', norm: 0.95 }
         };
 
-        const BASE_ANGLES = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330];
-        let clockNodes = [];
         let activeSoundType = WAVE_TYPES.SINE;
         let paletteIcons = [];
         let noiseBuffer = null;
         let audioPlayer = null; 
 
-        // --- 初始化解鎖 ---
         window.unlockAudioAndStart = () => {
             document.getElementById('unlock-overlay').style.display = 'none';
             initAudio();
@@ -218,9 +224,7 @@
                     let newVol = this.audio.volume + 0.01;
                     if (newVol < 0.12) { 
                         this.audio.volume = newVol; this.fadeTimeout = setTimeout(fadeIn, 40); 
-                    } else {
-                        this.audio.volume = 0.12;
-                    }
+                    } else { this.audio.volume = 0.12; }
                 };
                 if (!this.audio.paused && this.audio.src) fadeOut(); else { this.audio.src = targetUrl; this.audio.play().then(() => { fadeIn(); }).catch(e => {}); }
             }
@@ -244,9 +248,7 @@
                     const output = noiseBuffer.getChannelData(0);
                     for (let i = 0; i < bufferSize; i++) output[i] = Math.random() * 2 - 1;
                     applySceneAudio(currentScene);
-                } catch (e) {
-                    console.error("Audio Context Init Error:", e);
-                }
+                } catch (e) { console.error("Audio Context Init Error:", e); }
             }
             if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
         }
@@ -273,9 +275,7 @@
                 masterDry.gain.cancelScheduledValues(now); 
                 masterDry.gain.setValueAtTime(masterDry.gain.value || 0.0001, now);
                 masterDry.gain.linearRampToValueAtTime(cfg.dry, now + 0.1);
-            } catch (e) {
-                masterWet.gain.value = 0.0001; masterDry.gain.value = cfg.dry;
-            }
+            } catch (e) { masterWet.gain.value = 0.0001; masterDry.gain.value = cfg.dry; }
             
             setTimeout(() => { 
                 if (!convolver) return; 
@@ -284,26 +284,17 @@
                     masterWet.gain.cancelScheduledValues(audioCtx.currentTime);
                     masterWet.gain.setValueAtTime(masterWet.gain.value || 0.0001, audioCtx.currentTime);
                     masterWet.gain.linearRampToValueAtTime(cfg.wet, audioCtx.currentTime + 0.1); 
-                } catch(e) {
-                    masterWet.gain.value = cfg.wet;
-                }
+                } catch(e) { masterWet.gain.value = cfg.wet; }
             }, 60);
         }
 
-        // --- 補上遺漏的場景切換控制邏輯 ---
         window.setScene = (sceneId) => {
             currentScene = sceneId;
-            // 切換背景環境音
             if (ambianceManager) ambianceManager.playScene(sceneId);
-            // 切換空間音效參數
             applySceneAudio(sceneId);
-            
-            // 更新 UI 按鈕狀態
             document.querySelectorAll('#scene-controls .ctrl-btn').forEach(btn => {
                 btn.classList.remove('active');
-                if(btn.getAttribute('data-action') === 'scene-' + sceneId) {
-                    btn.classList.add('active');
-                }
+                if(btn.getAttribute('data-action') === 'scene-' + sceneId) btn.classList.add('active');
             });
         };
         
@@ -325,16 +316,9 @@
                 const pz = -Math.cos(rad) * distance * 2.5;
                 
                 if (this.panner.positionX && typeof this.panner.positionX.setValueAtTime === 'function') {
-                    try {
-                        this.panner.positionX.value = px;
-                        this.panner.positionY.value = 0;
-                        this.panner.positionZ.value = pz;
-                    } catch (e) {
-                        this.panner.setPosition(px, 0, pz);
-                    }
-                } else {
-                    this.panner.setPosition(px, 0, pz);
-                }
+                    try { this.panner.positionX.value = px; this.panner.positionY.value = 0; this.panner.positionZ.value = pz; } 
+                    catch (e) { this.panner.setPosition(px, 0, pz); }
+                } else { this.panner.setPosition(px, 0, pz); }
 
                 air.frequency.value = Math.max(400, 20000 - (distance * 3500));
                 pinna.gain.value = pz < 0 ? 3.5 : -9.0; 
@@ -364,7 +348,6 @@
                     this.source = audioCtx.createOscillator(); this.source.type = 'sawtooth'; this.source.frequency.value = 3800;
                     this.lfo = audioCtx.createOscillator(); this.lfo.type = 'square'; this.lfo.frequency.value = 15;
                     const lfoG = audioCtx.createGain(); lfoG.gain.value = 0.5;
-                    
                     if (audioCtx.createConstantSource) {
                         try {
                             const off = audioCtx.createConstantSource(); off.offset.value = 0.5; off.start(now);
@@ -372,7 +355,6 @@
                             setTimeout(() => { try{off.stop();}catch(e){} }, duration * 1000 + 200);
                         } catch(e) {}
                     }
-                    
                     this.lfo.connect(lfoG);
                     const pg = audioCtx.createGain(); this.source.connect(pg); lfoG.connect(pg.gain); pg.connect(pinna);
                     this.lfo.start(now); this.lfo.stop(end);
@@ -407,9 +389,7 @@
                 window.setScene(targetScene);
                 if (!audioPlayer) audioPlayer = new DirectionalPlayer();
                 audioPlayer.play(targetType, targetAngleDeg, targetDistance, CONSTANT_DURATION);
-            } catch (err) {
-                console.error("Play Execution Error", err);
-            }
+            } catch (err) { console.error("Play Execution Error", err); }
 
             setTimeout(() => { 
                 if (challengeState !== 'listening') return; 
@@ -434,10 +414,9 @@
             nextBtnHitArea = { x: centerX, y: centerY - 20 * uiScale, r: 70 * uiScale };
         }
 
-        // --- 核心邏輯派發器 ---
         function executeAction(actionStr) {
             try {
-                initAudio(); // 確保已喚醒
+                initAudio(); 
                 if (actionStr.startsWith('mode-')) {
                     const steps = parseInt(actionStr.split('-')[1]);
                     if (!isChallengeMode) {
@@ -446,7 +425,7 @@
                         document.getElementById(`btn-${steps}`).classList.add('active');
                     }
                 } else if (actionStr === 'start') {
-                    if (challengeState === 'preparing') return; // 防呆
+                    if (challengeState === 'preparing') return; 
                     if (audioPlayer) audioPlayer.stop();
                     isChallengeMode = true; 
                     document.getElementById('mode-selection').style.display = "none"; document.getElementById('exit-btn').style.display = "block";
@@ -454,235 +433,4 @@
                     document.getElementById('radius-controls').style.display = "none";
                     totalScore = 0; currentRound = 1; document.getElementById('score-display').innerText = `總積分: 0`; document.getElementById('round-display').innerText = `回合: 1 / 5`;
                     challengeState = 'preparing'; 
-                    document.getElementById('center-hint').innerHTML = `準備好了嗎？<br><span style='font-size:16px; color:#fff'>懸停此處開始 ${activeSteps} 方位挑戰</span>`;
-                    document.getElementById('center-hint').style.opacity = 1;
-                    nextBtnHitArea = { x: centerX, y: centerY, r: 80 * uiScale };
-                } else if (actionStr === 'exit') {
-                    isChallengeMode = false;
-                    document.getElementById('mode-selection').style.display = "flex"; document.getElementById('exit-btn').style.display = "none";
-                    document.getElementById('score-display').style.display = "none"; document.getElementById('round-display').style.display = "none";
-                    document.getElementById('radius-controls').style.display = "flex"; document.getElementById('center-hint').style.opacity = 0;
-                    document.getElementById('end-modal').style.display = "none"; challengeState = 'idle';
-                } else if (actionStr.startsWith('rad-')) {
-                    if (!isChallengeMode) {
-                        currentRadius = parseFloat(actionStr.split('-')[1]);
-                        document.querySelectorAll('#radius-controls .ctrl-btn').forEach(btn => {
-                            btn.classList.remove('active'); 
-                            // 修正：改用 data-action 比對，比 innerText 更穩定
-                            if(btn.getAttribute('data-action') === actionStr) btn.classList.add('active');
-                        });
-                    }
-                } else if (actionStr.startsWith('scene-')) {
-                    const s = actionStr.split('-')[1];
-                    window.setScene(s);
-                } else if (actionStr === 'start_play') {
-                    if (challengeState === 'preparing') window.startChallengePlay();
-                } else if (actionStr === 'next_round') {
-                    if (challengeState !== 'feedback') return; // 防呆
-                    if (currentRound >= MAX_ROUNDS) {
-                        challengeState = 'finished'; document.getElementById('center-hint').style.opacity = 0;
-                        document.getElementById('final-score-text').innerText = totalScore; document.getElementById('end-modal').style.display = "flex"; return;
-                    }
-                    currentRound++; document.getElementById('round-display').innerText = `回合: ${currentRound} / 5`;
-                    window.startChallengePlay();
-                } else if (actionStr === 'replay_sound') {
-                    if (!audioPlayer) audioPlayer = new DirectionalPlayer();
-                    audioPlayer.play(targetType, targetAngleDeg, targetDistance, CONSTANT_DURATION);
-                    if (challengeState === 'feedback') {
-                        challengeState = 'replaying'; setTimeout(() => { if(challengeState === 'replaying') challengeState = 'feedback'; }, CONSTANT_DURATION * 1000 + 100);
-                    }
-                } else if (actionStr.startsWith('guess-')) {
-                    const angleIndex = parseInt(actionStr.split('-')[1]);
-                    window.submitGuess(angleIndex);
-                } else if (actionStr.startsWith('palette-')) {
-                    const pId = actionStr.split('-')[1];
-                    const typeInfo = Object.values(WAVE_TYPES).find(t => t.id === pId);
-                    if (typeInfo) activeSoundType = typeInfo;
-                } else if (actionStr.startsWith('playnode-')) {
-                    const idx = parseInt(actionStr.split('-')[1]);
-                    if (!audioPlayer) audioPlayer = new DirectionalPlayer(); 
-                    audioPlayer.play(activeSoundType, idx * (360/activeSteps), currentRadius, CONSTANT_DURATION);
-                }
-            } catch (err) {
-                console.error("Action Execution Error:", err);
-            }
-        }
-
-        // --- 視覺渲染 ---
-        function initLayout() {
-            dpr = window.devicePixelRatio || 1; width = window.innerWidth; height = window.innerHeight;
-            canvas.width = width * dpr; canvas.height = height * dpr; canvas.style.width = width + 'px'; canvas.style.height = height + 'px';
-            ctx.scale(dpr, dpr); centerX = width / 2; listenerPlaneY = height * 0.48; centerY = listenerPlaneY;
-            uiScale = Math.min(1.0, width / 1000) + 0.2; iconSize = Math.max(16, Math.min(28, width * 0.05));
-            displayRadiusX = Math.min(width * 0.4, height * 0.38); displayRadiusY = displayRadiusX * 0.75; 
-            const paletteX = width - iconSize * 2.0;
-            paletteIcons = [{ typeConfig: WAVE_TYPES.SINE, x: width - iconSize * 2.5, y: height * 0.25 }, { typeConfig: WAVE_TYPES.TRIANGLE, x: width - iconSize * 2.5, y: height * 0.40 }, { typeConfig: WAVE_TYPES.NOISE, x: width - iconSize * 2.5, y: height * 0.55 }, { typeConfig: WAVE_TYPES.BOATMAN, x: width - iconSize * 2.5, y: height * 0.70 }];
-        }
-
-        function drawBackground() {
-            const cfg = SCENE_CONFIG[currentScene];
-            const t = Date.now() * 0.001 * cfg.flow;
-            const bgGrad = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, height * 1.1);
-            bgGrad.addColorStop(0, cfg.bg); bgGrad.addColorStop(1, '#000000');
-            ctx.fillStyle = bgGrad; ctx.fillRect(0, 0, width, height);
-            ctx.lineWidth = 1; ctx.strokeStyle = cfg.main + '22';
-            
-            let bgSteps = activeSteps;
-            if (!isChallengeMode && hoverTarget && hoverTarget.action && hoverTarget.action.startsWith('mode-')) {
-                bgSteps = parseInt(hoverTarget.action.split('-')[1]);
-            }
-
-            for (let i = 0; i < bgSteps; i++) { const rad = (i * (360 / bgSteps)) * Math.PI / 180; ctx.beginPath(); ctx.moveTo(centerX, centerY); ctx.lineTo(centerX + Math.sin(rad) * width, centerY - Math.cos(rad) * height); ctx.stroke(); }
-            for (let r = 1; r <= 4; r++) { ctx.beginPath(); ctx.ellipse(centerX, centerY, displayRadiusX * (r/4), displayRadiusY * (r/4), 0, 0, Math.PI * 2); ctx.stroke(); }
-            ctx.save(); ctx.shadowBlur = 20; ctx.shadowColor = cfg.main + '55'; ctx.fillStyle = cfg.main + '33'; ctx.strokeStyle = cfg.main + 'aa';
-            ctx.beginPath(); ctx.ellipse(centerX, centerY + 5, 24, 10, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-            ctx.beginPath(); ctx.arc(centerX, centerY - 8, 10, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); ctx.restore();
-        }
-
-        function drawGeometry(ctx, type, x, y, baseSize, rgbStr, alpha = 1.0, pulse = 0, extraScale = 1.0) {
-            const breath = 1.0 + Math.sin(pulse * 2.5) * 0.08;
-            let currentSize = baseSize * extraScale * breath; if (type === 'sine' || type === 'triangle') currentSize *= 1.25; 
-            ctx.save(); ctx.translate(x, y); 
-            const glow = ctx.createRadialGradient(0, 0, 0, 0, 0, currentSize * 3);
-            glow.addColorStop(0, `rgba(${rgbStr}, ${alpha * 0.5})`); glow.addColorStop(1, 'transparent');
-            ctx.fillStyle = glow; ctx.beginPath(); ctx.arc(0, 0, currentSize * 3, 0, Math.PI * 2); ctx.fill();
-            ctx.fillStyle = `rgba(${rgbStr}, ${alpha})`; ctx.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.9})`; ctx.lineWidth = 2.0;
-            if (type === 'sine') { const r = Math.max(0.1, currentSize * 0.65); ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); ctx.rotate(pulse * 0.5); ctx.beginPath(); ctx.arc(currentSize * 0.4, 0, Math.max(0.1, currentSize * 0.35), 0, Math.PI * 2); ctx.stroke(); }
-            else if (type === 'triangle') { ctx.save(); ctx.rotate(pulse * 0.15); const s1 = currentSize * 1.2; ctx.beginPath(); ctx.moveTo(0, -s1); ctx.lineTo(s1, s1 * 0.8); ctx.lineTo(-s1, s1 * 0.8); ctx.closePath(); ctx.stroke(); ctx.restore(); ctx.save(); ctx.rotate(-pulse * 0.4); const s2 = s1 * 0.6; ctx.beginPath(); ctx.moveTo(0, s2); ctx.lineTo(s2, -s2 * 0.8); ctx.lineTo(-s2, -s2 * 0.8); ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.restore(); }
-            else if (type === 'noise') { ctx.beginPath(); for (let i = 0; i < 12; i++) { let r = currentSize * (0.8 + Math.random() * 0.3); let a = (i / 12) * Math.PI * 2; ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r); } ctx.closePath(); ctx.fill(); ctx.stroke(); }
-            else if (type === 'boatman') { ctx.rotate(pulse * 0.2); const s = currentSize * 0.9; const paddle = Math.sin(pulse * 4) * 0.3; ctx.beginPath(); ctx.moveTo(0, -s); ctx.lineTo(s * 0.6, 0); ctx.lineTo(0, s); ctx.lineTo(-s * 0.6, 0); ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.beginPath(); ctx.moveTo(s * 0.4, -s * 0.3); ctx.lineTo(s * (1.2 + paddle), -s * 0.8); ctx.moveTo(-s * 0.4, -s * 0.3); ctx.lineTo(-s * (1.2 + paddle), -s * 0.8); ctx.stroke(); }
-            ctx.restore();
-        }
-
-        function drawReplayButton(x, y, colorStr, isHovered) {
-            const r = 24 * uiScale; replayBtnHitArea = { x, y, r };
-            ctx.save(); ctx.translate(x, y);
-            ctx.shadowBlur = isHovered ? 20 : 8; ctx.shadowColor = `rgba(${colorStr}, 0.6)`;
-            ctx.fillStyle = isHovered ? `rgba(${colorStr}, 0.45)` : `rgba(${colorStr}, 0.25)`;
-            ctx.strokeStyle = `rgba(255, 255, 255, 0.85)`; ctx.lineWidth = 2.0;
-            ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI*2); ctx.fill(); ctx.stroke();
-            ctx.fillStyle = "#fff"; const triSize = r * 0.55;
-            ctx.beginPath(); ctx.moveTo(triSize * 0.6, 0); ctx.lineTo(-triSize * 0.4, -triSize * 0.5); ctx.lineTo(-triSize * 0.4, triSize * 0.5); ctx.closePath(); ctx.fill();
-            ctx.font = `bold ${14 * uiScale}px sans-serif`; ctx.textAlign = "center"; ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
-            ctx.fillText("再聽一次", 0, r + 22 * uiScale); ctx.restore();
-        }
-
-        function drawHoverCursor() {
-            ctx.save();
-            ctx.translate(pointerX, pointerY);
-            
-            ctx.strokeStyle = "rgba(100, 220, 255, 0.8)"; ctx.lineWidth = 2;
-            ctx.beginPath(); ctx.arc(0, 0, 8, 0, Math.PI*2); ctx.stroke();
-            ctx.beginPath(); ctx.arc(0, 0, 2, 0, Math.PI*2); ctx.fillStyle="#fff"; ctx.fill();
-
-            if (hoverTarget && !hasTriggered) {
-                const elapsed = Date.now() - hoverStartTime;
-                const progress = Math.min(1.0, Math.max(0, elapsed / DWELL_DURATION));
-                ctx.strokeStyle = "#44ffaa"; ctx.lineWidth = 4; ctx.lineCap = "round";
-                ctx.beginPath(); ctx.arc(0, 0, 16, -Math.PI/2, -Math.PI/2 + (Math.PI * 2 * progress)); ctx.stroke();
-                if (progress >= 1.0) {
-                    hasTriggered = true; executeAction(hoverTarget.action);
-                    ctx.beginPath(); ctx.arc(0, 0, 30, 0, Math.PI*2); ctx.fillStyle = "rgba(68, 255, 170, 0.4)"; ctx.fill();
-                }
-            }
-            ctx.restore();
-        }
-
-        function checkHoverTargets() {
-            let newTarget = null;
-            
-            // 修正：全域清除所有 HTML 按鈕的 hovering 狀態，避免指標移開後仍有按鈕亮起的視覺殘留
-            document.querySelectorAll('button').forEach(b => b.classList.remove('hovering'));
-            
-            const htmlBtns = document.querySelectorAll('button:not([style*="display: none"]):not([style*="display:none"])');
-            for (let btn of htmlBtns) {
-                if (btn.parentElement && window.getComputedStyle(btn.parentElement).display === 'none') continue;
-                const rect = btn.getBoundingClientRect();
-                if (pointerX >= rect.left && pointerX <= rect.right && pointerY >= rect.top && pointerY <= rect.bottom) {
-                    newTarget = { type: 'html', el: btn, action: btn.getAttribute('data-action') };
-                    btn.classList.add('hovering'); 
-                    break; // 找到目標就跳出，前面的狀態清除已確保其他按鈕不會被誤判
-                }
-            }
-
-            if (!newTarget) {
-                if (isChallengeMode && (challengeState === 'feedback' || challengeState === 'replaying')) {
-                    if (Math.sqrt((pointerX - replayBtnHitArea.x)**2 + (pointerY - replayBtnHitArea.y)**2) < replayBtnHitArea.r) { newTarget = { type: 'canvas', action: 'replay_sound' }; }
-                }
-                if (!newTarget && isChallengeMode) {
-                    if (challengeState === 'feedback' && Math.sqrt((pointerX - nextBtnHitArea.x)**2 + (pointerY - nextBtnHitArea.y)**2) < nextBtnHitArea.r) { newTarget = { type: 'canvas', action: 'next_round' }; }
-                    if (challengeState === 'preparing' && Math.sqrt((pointerX - centerX)**2 + (pointerY - centerY)**2) < 80 * uiScale) { newTarget = { type: 'canvas', action: 'start_play' }; }
-                }
-                if (!newTarget && !isChallengeMode) {
-                    for (let i = 0; i < paletteIcons.length; i++) {
-                        const p = paletteIcons[i]; if (Math.sqrt((pointerX - p.x)**2 + (pointerY - p.y)**2) < 45 * uiScale) { newTarget = { type: 'canvas', action: `palette-${p.typeConfig.id}` }; break; }
-                    }
-                }
-                if (!newTarget && (!isChallengeMode || challengeState === 'guessing')) {
-                    let checkSteps = activeSteps;
-                    if (!isChallengeMode && hoverTarget && hoverTarget.action && hoverTarget.action.startsWith('mode-')) checkSteps = parseInt(hoverTarget.action.split('-')[1]);
-                    const stepAngle = 360 / checkSteps;
-                    for (let i = 0; i < checkSteps; i++) {
-                        const rad = (i * stepAngle) * Math.PI / 180;
-                        const nx = centerX + Math.sin(rad) * displayRadiusX * currentVisualFactor;
-                        const ny = centerY - Math.cos(rad) * displayRadiusY * currentVisualFactor;
-                        if (Math.sqrt((pointerX - nx)**2 + (pointerY - ny)**2) < 45 * uiScale) {
-                            newTarget = { type: 'canvas', action: isChallengeMode ? `guess-${i}` : `playnode-${i}` };
-                            break;
-                        }
-                    }
-                }
-            }
-
-            if (newTarget) {
-                if (!hoverTarget || hoverTarget.action !== newTarget.action) { hoverTarget = newTarget; hoverStartTime = Date.now(); hasTriggered = false; }
-            } else { hoverTarget = null; hasTriggered = false; }
-        }
-
-        function animate() {
-            checkHoverTargets();
-
-            let targetActiveDist = 1.0;
-            if (isChallengeMode) { if (challengeState === 'idle' || challengeState === 'preparing') targetActiveDist = 3.0; else targetActiveDist = targetDistance; }
-            else { targetActiveDist = currentRadius; }
-            currentVisualFactor += (getRadiusFactor(targetActiveDist) - currentVisualFactor) * 0.12; 
-            
-            drawBackground();
-            const now = Date.now(); const pulse = now * 0.002;
-            paletteIcons.forEach(p => { const isActive = (!isChallengeMode && p.typeConfig.id === activeSoundType.id); drawGeometry(ctx, p.typeConfig.id, p.x, p.y, iconSize, p.typeConfig.color, isActive ? 1.0 : 0.4, pulse, isActive ? 1.2 : 1.0); if (isActive) { ctx.strokeStyle = `rgba(${p.typeConfig.color}, 0.8)`; ctx.beginPath(); ctx.arc(p.x, p.y, iconSize * 2, 0, Math.PI*2); ctx.stroke(); } });
-            
-            const renderType = isChallengeMode ? targetType : activeSoundType;
-            let displaySteps = activeSteps;
-            if (!isChallengeMode && hoverTarget && hoverTarget.action && hoverTarget.action.startsWith('mode-')) {
-                displaySteps = parseInt(hoverTarget.action.split('-')[1]);
-            }
-
-            if (renderType) {
-                const stepAngle = 360 / displaySteps;
-                for (let i = 0; i < displaySteps; i++) {
-                    const angle = i * stepAngle; const rad = angle * Math.PI / 180;
-                    const nodeX = centerX + Math.sin(rad) * displayRadiusX * currentVisualFactor;
-                    const nodeY = centerY - Math.cos(rad) * displayRadiusY * currentVisualFactor;
-                    let alpha = 0.2; let scale = 0.8;
-                    const isNodeHovered = (hoverTarget && hoverTarget.action && hoverTarget.action.includes(`-${i}`));
-                    
-                    if (isChallengeMode) {
-                        if (challengeState === 'listening') alpha = 0.05;
-                        else if (challengeState === 'guessing') { alpha = 0.35; if (isNodeHovered) { alpha = 0.9; scale = 1.15 + 0.1 * Math.sin(now / 150); } }
-                        else if (challengeState === 'feedback' || challengeState === 'replaying') { if (Math.abs(angle - targetAngleDeg) < 0.1) { alpha = 1.0; scale = 1.3; ctx.beginPath(); const beam = ctx.createLinearGradient(centerX, centerY, nodeX, nodeY); beam.addColorStop(0, 'rgba(100, 220, 255, 0.1)'); beam.addColorStop(1, `rgba(${renderType.color}, 0.9)`); ctx.strokeStyle = beam; ctx.lineWidth = 3; ctx.moveTo(centerX, centerY); ctx.lineTo(nodeX, nodeY); ctx.stroke(); } else if (i === guessIndex) { alpha = 0.8; ctx.fillStyle = "#ff4444"; ctx.shadowBlur = 15; ctx.shadowColor = "#ff0000"; ctx.beginPath(); ctx.arc(nodeX, nodeY, 8, 0, Math.PI*2); ctx.fill(); ctx.shadowBlur = 0; } else alpha = 0.15; }
-                    } else { if (isNodeHovered) { alpha = 0.9; scale = 1.15 + 0.1 * Math.sin(now / 150); } else alpha = 0.4; }
-                    drawGeometry(ctx, renderType.id, nodeX, nodeY, iconSize, renderType.color, alpha, pulse, scale);
-                }
-            }
-            if (isChallengeMode && (challengeState === 'feedback' || challengeState === 'replaying')) { drawReplayButton(centerX, centerY + 105 * uiScale, renderType.color, hoverTarget && hoverTarget.action === 'replay_sound'); }
-            
-            drawHoverCursor();
-            requestAnimationFrame(animate);
-        }
-
-        window.addEventListener('pointermove', (e) => { pointerX = e.clientX; pointerY = e.clientY; });
-        
-        window.addEventListener('resize', initLayout); initLayout(); animate();
-    </script>
-</body>
-</html>
+                    document.getElementById('center-hint').innerHTML = `準備好了嗎？<br><span style='font-size:16px;
