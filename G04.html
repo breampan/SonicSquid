@@ -82,7 +82,6 @@
 </head>
 <body>
 
-    <!-- 啟動保護層：支援點擊與觸控 -->
     <div id="unlock-overlay" onclick="unlockAudioAndStart()" ontouchstart="unlockAudioAndStart()">
         <div class="pulse-circle"></div>
         <h2 style="letter-spacing: 2px;">系統準備就緒</h2>
@@ -208,7 +207,6 @@
                 this.currentUrl = targetUrl; if (this.fadeTimeout) clearTimeout(this.fadeTimeout);
                 const fadeOut = () => {
                     let newVol = this.audio.volume - 0.02;
-                    // 防禦：確保音量不會被設為負數
                     if (newVol > 0) { 
                         this.audio.volume = newVol; this.fadeTimeout = setTimeout(fadeOut, 30); 
                     } else { 
@@ -268,7 +266,6 @@
             }
             const now = audioCtx.currentTime;
             try {
-                // 防禦：呼叫 linearRamp 前需先設定當前值，否則 Safari 容易爆音或報錯
                 masterWet.gain.cancelScheduledValues(now); 
                 masterWet.gain.setValueAtTime(masterWet.gain.value || 0.0001, now);
                 masterWet.gain.linearRampToValueAtTime(0.0001, now + 0.05);
@@ -292,6 +289,23 @@
                 }
             }, 60);
         }
+
+        // --- 補上遺漏的場景切換控制邏輯 ---
+        window.setScene = (sceneId) => {
+            currentScene = sceneId;
+            // 切換背景環境音
+            if (ambianceManager) ambianceManager.playScene(sceneId);
+            // 切換空間音效參數
+            applySceneAudio(sceneId);
+            
+            // 更新 UI 按鈕狀態
+            document.querySelectorAll('#scene-controls .ctrl-btn').forEach(btn => {
+                btn.classList.remove('active');
+                if(btn.getAttribute('data-action') === 'scene-' + sceneId) {
+                    btn.classList.add('active');
+                }
+            });
+        };
         
         function getRadiusFactor(dist) { if (dist <= 0.5) return 0.25; if (dist <= 1.0) return 0.50; if (dist <= 2.0) return 0.75; return 1.0; }
 
@@ -310,7 +324,6 @@
                 const px = Math.sin(rad) * distance * 2.5; 
                 const pz = -Math.cos(rad) * distance * 2.5;
                 
-                // 防禦：舊版 iOS Safari 不支援 .value 的崩潰問題
                 if (this.panner.positionX && typeof this.panner.positionX.setValueAtTime === 'function') {
                     try {
                         this.panner.positionX.value = px;
@@ -352,7 +365,6 @@
                     this.lfo = audioCtx.createOscillator(); this.lfo.type = 'square'; this.lfo.frequency.value = 15;
                     const lfoG = audioCtx.createGain(); lfoG.gain.value = 0.5;
                     
-                    // 防禦：舊設備可能不支援 createConstantSource
                     if (audioCtx.createConstantSource) {
                         try {
                             const off = audioCtx.createConstantSource(); off.offset.value = 0.5; off.start(now);
@@ -455,7 +467,9 @@
                     if (!isChallengeMode) {
                         currentRadius = parseFloat(actionStr.split('-')[1]);
                         document.querySelectorAll('#radius-controls .ctrl-btn').forEach(btn => {
-                            btn.classList.remove('active'); if(btn.innerText.includes(currentRadius.toString())) btn.classList.add('active');
+                            btn.classList.remove('active'); 
+                            // 修正：改用 data-action 比對，比 innerText 更穩定
+                            if(btn.getAttribute('data-action') === actionStr) btn.classList.add('active');
                         });
                     }
                 } else if (actionStr.startsWith('scene-')) {
@@ -576,14 +590,19 @@
 
         function checkHoverTargets() {
             let newTarget = null;
+            
+            // 修正：全域清除所有 HTML 按鈕的 hovering 狀態，避免指標移開後仍有按鈕亮起的視覺殘留
+            document.querySelectorAll('button').forEach(b => b.classList.remove('hovering'));
+            
             const htmlBtns = document.querySelectorAll('button:not([style*="display: none"]):not([style*="display:none"])');
             for (let btn of htmlBtns) {
                 if (btn.parentElement && window.getComputedStyle(btn.parentElement).display === 'none') continue;
                 const rect = btn.getBoundingClientRect();
                 if (pointerX >= rect.left && pointerX <= rect.right && pointerY >= rect.top && pointerY <= rect.bottom) {
                     newTarget = { type: 'html', el: btn, action: btn.getAttribute('data-action') };
-                    btn.classList.add('hovering'); break;
-                } else { btn.classList.remove('hovering'); }
+                    btn.classList.add('hovering'); 
+                    break; // 找到目標就跳出，前面的狀態清除已確保其他按鈕不會被誤判
+                }
             }
 
             if (!newTarget) {
