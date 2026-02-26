@@ -207,11 +207,22 @@
                 const targetUrl = this.urls[scene]; if (!targetUrl || this.currentUrl === targetUrl) return;
                 this.currentUrl = targetUrl; if (this.fadeTimeout) clearTimeout(this.fadeTimeout);
                 const fadeOut = () => {
-                    if (this.audio.volume > 0.02) { this.audio.volume -= 0.02; this.fadeTimeout = setTimeout(fadeOut, 30); }
-                    else { this.audio.volume = 0; this.audio.pause(); this.audio.src = targetUrl; this.audio.play().then(() => { fadeIn(); }).catch(e => {}); }
+                    let newVol = this.audio.volume - 0.02;
+                    // 防禦：確保音量不會被設為負數
+                    if (newVol > 0) { 
+                        this.audio.volume = newVol; this.fadeTimeout = setTimeout(fadeOut, 30); 
+                    } else { 
+                        this.audio.volume = 0; this.audio.pause(); this.audio.src = targetUrl; 
+                        this.audio.play().then(() => { fadeIn(); }).catch(e => {}); 
+                    }
                 };
                 const fadeIn = () => {
-                    if (this.audio.volume < 0.12) { this.audio.volume = Math.min(0.12, this.audio.volume + 0.01); this.fadeTimeout = setTimeout(fadeIn, 40); }
+                    let newVol = this.audio.volume + 0.01;
+                    if (newVol < 0.12) { 
+                        this.audio.volume = newVol; this.fadeTimeout = setTimeout(fadeIn, 40); 
+                    } else {
+                        this.audio.volume = 0.12;
+                    }
                 };
                 if (!this.audio.paused && this.audio.src) fadeOut(); else { this.audio.src = targetUrl; this.audio.play().then(() => { fadeIn(); }).catch(e => {}); }
             }
@@ -221,21 +232,25 @@
         function initAudio() {
             if (!ambianceManager) { ambianceManager = new AmbianceManager(); ambianceManager.playScene(currentScene); }
             if (!audioCtx) {
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                masterCompressor = audioCtx.createDynamicsCompressor();
-                masterCompressor.threshold.setTargetAtTime(-24, audioCtx.currentTime, 0.1);
-                masterCompressor.connect(audioCtx.destination);
-                convolver = audioCtx.createConvolver();
-                masterDry = audioCtx.createGain(); masterWet = audioCtx.createGain();
-                masterDry.gain.value = 0.0001; masterWet.gain.value = 0.0001;
-                masterDry.connect(masterCompressor); convolver.connect(masterWet); masterWet.connect(masterCompressor);
-                const bufferSize = audioCtx.sampleRate * 2; 
-                noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
-                const output = noiseBuffer.getChannelData(0);
-                for (let i = 0; i < bufferSize; i++) output[i] = Math.random() * 2 - 1;
-                applySceneAudio(currentScene);
+                try {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    masterCompressor = audioCtx.createDynamicsCompressor();
+                    masterCompressor.threshold.setTargetAtTime(-24, audioCtx.currentTime, 0.1);
+                    masterCompressor.connect(audioCtx.destination);
+                    convolver = audioCtx.createConvolver();
+                    masterDry = audioCtx.createGain(); masterWet = audioCtx.createGain();
+                    masterDry.gain.value = 0.0001; masterWet.gain.value = 0.0001;
+                    masterDry.connect(masterCompressor); convolver.connect(masterWet); masterWet.connect(masterCompressor);
+                    const bufferSize = audioCtx.sampleRate * 2; 
+                    noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+                    const output = noiseBuffer.getChannelData(0);
+                    for (let i = 0; i < bufferSize; i++) output[i] = Math.random() * 2 - 1;
+                    applySceneAudio(currentScene);
+                } catch (e) {
+                    console.error("Audio Context Init Error:", e);
+                }
             }
-            if (audioCtx.state === 'suspended') audioCtx.resume();
+            if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
         }
 
         function applySceneAudio(scene) {
@@ -252,9 +267,30 @@
                 }
             }
             const now = audioCtx.currentTime;
-            masterWet.gain.cancelScheduledValues(now); masterWet.gain.linearRampToValueAtTime(0.0001, now + 0.05);
-            masterDry.gain.cancelScheduledValues(now); masterDry.gain.linearRampToValueAtTime(cfg.dry, now + 0.1);
-            setTimeout(() => { if (!convolver) return; convolver.buffer = buffer; masterWet.gain.linearRampToValueAtTime(cfg.wet, audioCtx.currentTime + 0.1); }, 60);
+            try {
+                // 防禦：呼叫 linearRamp 前需先設定當前值，否則 Safari 容易爆音或報錯
+                masterWet.gain.cancelScheduledValues(now); 
+                masterWet.gain.setValueAtTime(masterWet.gain.value || 0.0001, now);
+                masterWet.gain.linearRampToValueAtTime(0.0001, now + 0.05);
+                
+                masterDry.gain.cancelScheduledValues(now); 
+                masterDry.gain.setValueAtTime(masterDry.gain.value || 0.0001, now);
+                masterDry.gain.linearRampToValueAtTime(cfg.dry, now + 0.1);
+            } catch (e) {
+                masterWet.gain.value = 0.0001; masterDry.gain.value = cfg.dry;
+            }
+            
+            setTimeout(() => { 
+                if (!convolver) return; 
+                try {
+                    convolver.buffer = buffer; 
+                    masterWet.gain.cancelScheduledValues(audioCtx.currentTime);
+                    masterWet.gain.setValueAtTime(masterWet.gain.value || 0.0001, audioCtx.currentTime);
+                    masterWet.gain.linearRampToValueAtTime(cfg.wet, audioCtx.currentTime + 0.1); 
+                } catch(e) {
+                    masterWet.gain.value = cfg.wet;
+                }
+            }, 60);
         }
         
         function getRadiusFactor(dist) { if (dist <= 0.5) return 0.25; if (dist <= 1.0) return 0.50; if (dist <= 2.0) return 0.75; return 1.0; }
@@ -274,8 +310,8 @@
                 const px = Math.sin(rad) * distance * 2.5; 
                 const pz = -Math.cos(rad) * distance * 2.5;
                 
-                // 降級相容邏輯：防禦舊版 iOS Safari 不支援 .value 的崩潰問題
-                if (this.panner.positionX !== undefined) {
+                // 防禦：舊版 iOS Safari 不支援 .value 的崩潰問題
+                if (this.panner.positionX && typeof this.panner.positionX.setValueAtTime === 'function') {
                     try {
                         this.panner.positionX.value = px;
                         this.panner.positionY.value = 0;
@@ -293,10 +329,10 @@
                 const attackTime = 0.05; const releaseTime = 0.15;  
                 const end = now + duration; let targetVol = 0.4 * (typeConfig.norm || 1.0); 
 
-                this.gain.gain.setValueAtTime(0, now);
+                this.gain.gain.setValueAtTime(0.0001, now);
                 this.gain.gain.linearRampToValueAtTime(targetVol, now + attackTime);
                 this.gain.gain.setValueAtTime(targetVol, Math.max(now + attackTime, end - releaseTime));
-                this.gain.gain.linearRampToValueAtTime(0, end);
+                this.gain.gain.linearRampToValueAtTime(0.0001, end);
 
                 if (typeConfig.id === 'sine' || typeConfig.id === 'triangle') {
                     this.source = audioCtx.createOscillator(); this.modulator = audioCtx.createOscillator(); this.modGain = audioCtx.createGain();
@@ -315,8 +351,17 @@
                     this.source = audioCtx.createOscillator(); this.source.type = 'sawtooth'; this.source.frequency.value = 3800;
                     this.lfo = audioCtx.createOscillator(); this.lfo.type = 'square'; this.lfo.frequency.value = 15;
                     const lfoG = audioCtx.createGain(); lfoG.gain.value = 0.5;
-                    const off = audioCtx.createConstantSource(); off.offset.value = 0.5; off.start();
-                    this.lfo.connect(lfoG); off.connect(lfoG.gain);
+                    
+                    // 防禦：舊設備可能不支援 createConstantSource
+                    if (audioCtx.createConstantSource) {
+                        try {
+                            const off = audioCtx.createConstantSource(); off.offset.value = 0.5; off.start(now);
+                            off.connect(lfoG.gain);
+                            setTimeout(() => { try{off.stop();}catch(e){} }, duration * 1000 + 200);
+                        } catch(e) {}
+                    }
+                    
+                    this.lfo.connect(lfoG);
                     const pg = audioCtx.createGain(); this.source.connect(pg); lfoG.connect(pg.gain); pg.connect(pinna);
                     this.lfo.start(now); this.lfo.stop(end);
                 }
@@ -327,7 +372,11 @@
             stop() {
                 if (!this.gain || !this.source) return;
                 const now = audioCtx.currentTime; 
-                this.gain.gain.cancelScheduledValues(now); this.gain.gain.linearRampToValueAtTime(0, now + 0.03); 
+                try {
+                    this.gain.gain.cancelScheduledValues(now); 
+                    this.gain.gain.setValueAtTime(this.gain.gain.value || 0.0001, now);
+                    this.gain.gain.linearRampToValueAtTime(0.0001, now + 0.03); 
+                } catch(e){}
                 const _s = this.source; const _m = this.modulator; const _l = this.lfo;
                 setTimeout(() => { try{ if(_s) _s.stop(); if(_m) _m.stop(); if(_l) _l.stop(); }catch(e){} }, 40);
                 this.source = null; this.gain = null;
@@ -341,9 +390,15 @@
             targetAngleDeg = randomStep * stepDeg; targetDistance = DISTANCES[Math.floor(Math.random() * DISTANCES.length)];
             targetType = Object.values(WAVE_TYPES)[Math.floor(Math.random() * 4)];
             targetScene = SCENE_KEYS[Math.floor(Math.random() * SCENE_KEYS.length)];
-            window.setScene(targetScene);
-            if (!audioPlayer) audioPlayer = new DirectionalPlayer();
-            audioPlayer.play(targetType, targetAngleDeg, targetDistance, CONSTANT_DURATION);
+            
+            try {
+                window.setScene(targetScene);
+                if (!audioPlayer) audioPlayer = new DirectionalPlayer();
+                audioPlayer.play(targetType, targetAngleDeg, targetDistance, CONSTANT_DURATION);
+            } catch (err) {
+                console.error("Play Execution Error", err);
+            }
+
             setTimeout(() => { 
                 if (challengeState !== 'listening') return; 
                 challengeState = 'guessing'; hint.innerHTML = "聲音來自哪個方位？<br><span style='font-size:16px; color:#fff'>請懸停在對應的圖示上</span>"; 
@@ -379,6 +434,7 @@
                         document.getElementById(`btn-${steps}`).classList.add('active');
                     }
                 } else if (actionStr === 'start') {
+                    if (challengeState === 'preparing') return; // 防呆
                     if (audioPlayer) audioPlayer.stop();
                     isChallengeMode = true; 
                     document.getElementById('mode-selection').style.display = "none"; document.getElementById('exit-btn').style.display = "block";
@@ -406,15 +462,14 @@
                     const s = actionStr.split('-')[1];
                     window.setScene(s);
                 } else if (actionStr === 'start_play') {
-                    window.startChallengePlay();
+                    if (challengeState === 'preparing') window.startChallengePlay();
                 } else if (actionStr === 'next_round') {
-                    if (currentRound >= MAX_ROUNDS && challengeState === 'feedback') {
+                    if (challengeState !== 'feedback') return; // 防呆
+                    if (currentRound >= MAX_ROUNDS) {
                         challengeState = 'finished'; document.getElementById('center-hint').style.opacity = 0;
                         document.getElementById('final-score-text').innerText = totalScore; document.getElementById('end-modal').style.display = "flex"; return;
                     }
-                    if (challengeState === 'feedback') {
-                        currentRound++; document.getElementById('round-display').innerText = `回合: ${currentRound} / 5`;
-                    }
+                    currentRound++; document.getElementById('round-display').innerText = `回合: ${currentRound} / 5`;
                     window.startChallengePlay();
                 } else if (actionStr === 'replay_sound') {
                     if (!audioPlayer) audioPlayer = new DirectionalPlayer();
@@ -458,7 +513,6 @@
             ctx.fillStyle = bgGrad; ctx.fillRect(0, 0, width, height);
             ctx.lineWidth = 1; ctx.strokeStyle = cfg.main + '22';
             
-            // 加入預覽防錯，確保使用者的滑鼠不在無效目標上
             let bgSteps = activeSteps;
             if (!isChallengeMode && hoverTarget && hoverTarget.action && hoverTarget.action.startsWith('mode-')) {
                 bgSteps = parseInt(hoverTarget.action.split('-')[1]);
@@ -495,10 +549,10 @@
             ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI*2); ctx.fill(); ctx.stroke();
             ctx.fillStyle = "#fff"; const triSize = r * 0.55;
             ctx.beginPath(); ctx.moveTo(triSize * 0.6, 0); ctx.lineTo(-triSize * 0.4, -triSize * 0.5); ctx.lineTo(-triSize * 0.4, triSize * 0.5); ctx.closePath(); ctx.fill();
-            ctx.font = `bold ${14 * uiScale}px sans-serif`; ctx.textAlign = "center"; ctx.fillStyle = "rgba(255, 255, 255, 0.9)"; ctx.fillText("再聽一次", 0, r + 22 * uiScale); ctx.restore();
+            ctx.font = `bold ${14 * uiScale}px sans-serif`; ctx.textAlign = "center"; ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
+            ctx.fillText("再聽一次", 0, r + 22 * uiScale); ctx.restore();
         }
 
-        // --- 核心：繪製游標與凝視進度環 ---
         function drawHoverCursor() {
             ctx.save();
             ctx.translate(pointerX, pointerY);
@@ -607,12 +661,8 @@
             requestAnimationFrame(animate);
         }
 
-        // 全局擷取指標座標 (確保只由懸停驅動)
         window.addEventListener('pointermove', (e) => { pointerX = e.clientX; pointerY = e.clientY; });
         
-        // 僅保留解鎖用途，移除其餘業務邏輯以避免與 Hover 機制發生連鎖衝突
-        window.addEventListener('pointerdown', (e) => { initAudio(); });
-
         window.addEventListener('resize', initLayout); initLayout(); animate();
     </script>
 </body>
