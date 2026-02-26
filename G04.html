@@ -10,17 +10,15 @@
             overflow: hidden; background-color: #01050a;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
             user-select: none; -webkit-user-select: none;
-            cursor: none; /* 隱藏系統預設游標，使用自訂的凝視準星 */
+            cursor: none;
         }
         canvas { display: block; touch-action: none; cursor: none; }
 
-        /* 頂層游標畫布：設定極高 z-index 並允許事件穿透 */
         #cursorCanvas {
             position: absolute; top: 0; left: 0;
             z-index: 9999; pointer-events: none;
         }
 
-        /* 初始解鎖畫面 */
         #unlock-overlay {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
             background: #01050a; z-index: 10000; display: flex; flex-direction: column;
@@ -32,7 +30,6 @@
         }
         @keyframes pulse { 0% { transform: scale(0.9); box-shadow: 0 0 0 0 rgba(100, 220, 255, 0.7); } 70% { transform: scale(1.1); box-shadow: 0 0 0 20px rgba(100, 220, 255, 0); } 100% { transform: scale(0.9); box-shadow: 0 0 0 0 rgba(100, 220, 255, 0); } }
 
-        /* UI 介面 */
         #controls-container {
             position: absolute; bottom: 25px; left: 50%;
             transform: translateX(-50%); display: flex; flex-direction: column; gap: 10px;
@@ -150,7 +147,7 @@
         let currentRadius = 1.0;
         let currentVisualFactor = 0.5;
         let isChallengeMode = false;
-        let isSystemUnlocked = false; // 全域解鎖旗標
+        let isSystemUnlocked = false; 
         
         let activeSteps = 12;   
         let challengeState = 'idle'; 
@@ -194,7 +191,6 @@
         let noiseBuffer = null;
         let audioPlayer = null; 
 
-        // 全域解鎖機制
         window.unlockAudioAndStart = () => {
             if (isSystemUnlocked) return;
             isSystemUnlocked = true;
@@ -649,7 +645,10 @@
                     const nodeX = centerX + Math.sin(rad) * displayRadiusX * currentVisualFactor;
                     const nodeY = centerY - Math.cos(rad) * displayRadiusY * currentVisualFactor;
                     let alpha = 0.2; let scale = 0.8;
-                    const isNodeHovered = (hoverTarget && hoverTarget.action && hoverTarget.action.includes(`-${i}`));
+                    
+                    // 修正：將模糊比對 .includes 改為精確比對 ===
+                    const expectedAction = isChallengeMode ? `guess-${i}` : `playnode-${i}`;
+                    const isNodeHovered = (hoverTarget && hoverTarget.action === expectedAction);
                     
                     if (isChallengeMode) {
                         if (challengeState === 'listening') alpha = 0.05;
@@ -665,7 +664,6 @@
             requestAnimationFrame(animate);
         }
 
-        // 全域綁定解鎖事件，防止透明 Canvas 吃掉點擊
         window.addEventListener('pointerdown', window.unlockAudioAndStart);
         window.addEventListener('click', window.unlockAudioAndStart);
         window.addEventListener('touchstart', window.unlockAudioAndStart);
