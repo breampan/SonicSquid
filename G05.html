@@ -10,7 +10,7 @@
             overflow: hidden; background-color: #01050a;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
             user-select: none; -webkit-user-select: none;
-            cursor: none; /* 隱藏系統游標 */
+            cursor: none; 
         }
         canvas { display: block; touch-action: none; cursor: none;}
         
@@ -57,6 +57,9 @@
             transition: all 0.3s; pointer-events: auto; cursor: none; text-align: center;
         }
         .action-btn.hovering { filter: brightness(1.5) drop-shadow(0 0 10px #64dcff); }
+        .btn-highlight { border-color: #ffaa44; color: #ffaa44; background: rgba(255, 170, 68, 0.15); box-shadow: 0 0 15px rgba(255, 170, 68, 0.15); }
+        .btn-highlight.hovering { filter: brightness(1.3) drop-shadow(0 0 10px #ffaa44); }
+        
         .score-panel { color: #64dcff; font-size: 18px; font-weight: bold; display: none; text-shadow: 0 0 10px rgba(100,220,255,0.5); }
         
         #replay-ui { position: absolute; z-index: 200; display: none; pointer-events: auto; transform: translate(-50%, 0); }
@@ -88,8 +91,9 @@
     </div>
 
     <div id="challenge-ui">
-        <button id="mode-toggle" class="action-btn" data-action="toggle_mode">開啟聽能定向挑戰</button>
-        <div id="score-display" class="score-panel">題數: 0/5 | 積分: 0</div>
+        <button class="action-btn btn-highlight" data-action="tutorial">🎧 新手動態與方位教學</button>
+        <button id="mode-toggle" class="action-btn" style="margin-top: 10px; border-color: #fff; color: #fff;" data-action="toggle_mode">開啟聽能定向挑戰</button>
+        <div id="score-display" class="score-panel" style="margin-top: 10px;">題數: 0/5 | 積分: 0</div>
     </div>
 
     <div id="replay-ui">
@@ -152,17 +156,19 @@
             FROG: { id: 'frog', color: '255, 85, 68', norm: 0.9 }
         };
 
+        let activeSoundType = WAVE_TYPES.BELL;
+        let paletteIcons = [];
+        let activeObjects = []; 
+        let challengeTarget = null;
+        let waterBubbles = [];
+        
         let isChallengeMode = false;
         let challengeState = 'idle'; 
         let questionsDone = 0;
         let totalScore = 0;
         let sessionScores = [];
-        let challengeTarget = null;
         let lastGuessX = 0, lastGuessY = 0;
         let replayIndex = 0;
-        let activeObjects = []; 
-        let paletteIcons = [];
-        let waterBubbles = [];
         
         let screenCenterHitArea = { x: 0, y: 0, r: 0 };
 
@@ -363,14 +369,15 @@
                 this.normFactor = typeConfig.norm || 1.0; 
                 this.smoothedX = x; this.smoothedY = y;
                 this.isChallengeObject = false; 
+                this.isTutorialObject = false;
                 this.isMuted = false;
+                this.isFading = false;
                 this.life = 1.0; this.pulse = 0; this.trajectory = [];
                 this.nodes = [];
                 this.gain = null; this.panner = null; this.dryGain = null; this.wetGain = null;
                 
-                // 動態版用全螢幕映射距離
-                this.targetDistance = 1.0;
-                this.targetAngleDeg = 0;
+                this.age = 0; // 用來控制沙盒模式的自動消散
+                this.fadeSpeed = 0.02;
             }
             play() {
                 if (!audioCtx) return; const now = audioCtx.currentTime;
@@ -399,10 +406,7 @@
                     freqs.forEach((freq, i) => {
                         let osc = audioCtx.createOscillator(); let oscGain = audioCtx.createGain();
                         osc.type = i % 2 === 0 ? 'sine' : 'triangle'; osc.frequency.value = freq;
-                        
-                        // 動態版持續敲擊的 Envelope
                         this.nodes.push({type: 'env', gain: oscGain, i: i, lastTrigger: 0});
-                        
                         osc.connect(oscGain); oscGain.connect(this.conchaBoost);
                         osc.start(now); this.nodes.push({type: 'osc', node: osc});
                     });
@@ -411,7 +415,6 @@
                     let lfo = audioCtx.createOscillator(); lfo.type = 'sine'; lfo.frequency.value = 12.0; 
                     let lfoGain = audioCtx.createGain(); lfoGain.gain.value = 0.8;
                     let amNode = audioCtx.createGain(); amNode.gain.value = 0;
-                    
                     lfo.connect(lfoGain);
                     if (audioCtx.createConstantSource) {
                         try { const off = audioCtx.createConstantSource(); off.offset.value = 0.5; off.start(now); off.connect(lfoGain.gain); this.nodes.push({type:'src', node:off}); } catch(e) {}
@@ -429,7 +432,6 @@
                     let filter = audioCtx.createBiquadFilter(); filter.type = 'lowpass'; filter.Q.value = 8.0; filter.frequency.value = 600;
                     let lfo = audioCtx.createOscillator(); lfo.type = 'sawtooth'; lfo.frequency.value = 3.0; 
                     let lfoGain = audioCtx.createGain(); lfoGain.gain.value = 2000;
-                    
                     lfo.connect(lfoGain); lfoGain.connect(filter.frequency); osc.connect(filter); filter.connect(this.conchaBoost);
                     osc.start(now); lfo.start(now);
                     this.nodes.push({type:'osc', node:osc}, {type:'osc', node:lfo});
@@ -446,13 +448,23 @@
                 this.gain.gain.setTargetAtTime(0.5 * this.normFactor, now + 0.05, 0.22); 
             }
 
+            startFadeOut(fast = false) {
+                if (!this.gain || !audioCtx) return;
+                const now = audioCtx.currentTime;
+                this.isFading = true; this.isMuted = true;
+                const fadeDuration = fast ? 2.0 : 4.0; 
+                const timeConstant = fadeDuration / 3.5; 
+                this.gain.gain.cancelScheduledValues(now);
+                this.gain.gain.setTargetAtTime(0, now, timeConstant); 
+                this.fadeSpeed = 1.0 / (fadeDuration * 60);
+                setTimeout(() => this.cleanup(), fadeDuration * 1000 + 500);
+            }
+
             updatePanner(isInit = false) {
                 if (!this.panner || !audioCtx || this.isMuted) return; 
                 const now = audioCtx.currentTime;
                 
-                // 將畫面座標映射為 3D 空間 (中心點為 listener)
                 const posX = (this.smoothedX - centerX) / (width * 0.4) * 3.0;
-                // listenerPlaneY 為 Z=0 平面。上方為前(負Z)，下方為後(正Z)
                 const posZ = (this.smoothedY - listenerPlaneY) / (height * 0.4) * 3.0;
                 
                 const tc = 0.22; 
@@ -476,10 +488,9 @@
                 this.wetGain.gain.setTargetAtTime(reverbAccumulation * sceneCfg.baseWet, now, tc);
 
                 let volBase = 0.5 * this.life * this.normFactor;
-                if (!this.isChallengeObject) volBase *= 1.2; // 沙盒模式稍微大聲一點
+                if (!this.isChallengeObject && !this.isTutorialObject) volBase *= 1.2; 
                 this.gain.gain.setTargetAtTime(volBase, now, tc);
 
-                // 更新動態音源特效
                 if (this.type === 'bell') {
                     this.nodes.forEach(n => {
                         if (n.type === 'env') {
@@ -492,7 +503,7 @@
                         }
                     });
                 } else if (this.type === 'wind' && this.windFilter) {
-                    const cycle = (now % 6) / 6; // 6秒一個週期
+                    const cycle = (now % 6) / 6; 
                     const windFreq = 400 + Math.sin(cycle * Math.PI * 2) * 2600;
                     this.windFilter.frequency.setTargetAtTime(Math.max(400, windFreq), now, 0.5);
                 }
@@ -510,17 +521,27 @@
             }
             update() {
                 this.pulse += 0.08;
-                if (!this.isChallengeObject) { 
-                    // 沙盒模式：游標就是位置
-                    this.life = 1.0; 
-                    this.x = pointerX; this.y = pointerY;
-                    this.smoothedX += (this.x - this.smoothedX) * 0.22;
-                    this.smoothedY += (this.y - this.smoothedY) * 0.22; 
-                    this.updatePanner(); 
+                
+                if (this.isTutorialObject) {
+                    this.smoothedX = this.x; this.smoothedY = this.y;
+                    this.updatePanner();
+                }
+                else if (!this.isChallengeObject) { 
+                    // 沙盒模式：游標跟隨，但會自動老化消散
+                    if (!this.isFading) {
+                        this.age += 16.6; 
+                        this.x = pointerX; this.y = pointerY;
+                        this.smoothedX += (this.x - this.smoothedX) * 0.22;
+                        this.smoothedY += (this.y - this.smoothedY) * 0.22; 
+                        this.updatePanner(); 
+                        if (this.age > 8000) { // 8秒後自動消散
+                            this.startFadeOut(true);
+                        }
+                    }
                 }
                 else if (this.isChallengeObject && challengeState === 'listening') { 
                     this.updateCustomPath(); 
-                    this.smoothedX += (this.x - this.smoothedX) * 0.5; // 挑戰模式追蹤稍快一點
+                    this.smoothedX += (this.x - this.smoothedX) * 0.5; 
                     this.smoothedY += (this.y - this.smoothedY) * 0.5; 
                     this.updatePanner(); 
                 }
@@ -535,11 +556,16 @@
                         screenCenterHitArea = { x: centerX, y: height * 0.45, r: 80 * uiScale };
                     }
                 }
+
+                if (this.isFading) { 
+                    this.life -= this.fadeSpeed; 
+                    if(this.life <= 0) this.cleanup(); 
+                }
             }
             draw(ctx) { 
                 if (this.isChallengeObject && (challengeState === 'listening' || challengeState === 'waiting_for_guess')) return; 
                 if (this.life <= 0) return; 
-                drawGeometry(ctx, this.type, this.x, this.y, 28 * uiScale, this.rgb, Math.max(0, this.life), this.pulse); 
+                drawGeometry(ctx, this.type, this.smoothedX, this.smoothedY, 28 * uiScale, this.rgb, Math.max(0, this.life), this.pulse); 
             }
         }
 
@@ -550,6 +576,17 @@
             ui.style.top = (challengeTarget.y > centerY) ? Math.min(height - 80, challengeTarget.y + offset) + "px" : Math.max(80, challengeTarget.y - offset - 40) + "px";
         }
 
+        // 將角度與距離映射為動態版的實際螢幕座標
+        const getTutorialCoords = (angleDeg, dist) => {
+            const rad = angleDeg * Math.PI / 180;
+            const px = Math.sin(rad) * dist;
+            const pz = -Math.cos(rad) * dist;
+            return {
+                x: centerX + (px / 3.0) * (width * 0.4),
+                y: listenerPlaneY + (pz / 3.0) * (height * 0.4)
+            };
+        };
+
         function executeAction(actionStr) {
             try {
                 initAudio(); 
@@ -558,6 +595,9 @@
                     isChallengeMode = !isChallengeMode;
                     const btn = document.getElementById('mode-toggle'); const scoreDisplay = document.getElementById('score-display');
                     const hint = document.getElementById('challenge-hint'); document.getElementById('replay-ui').style.display = "none";
+                    
+                    document.querySelectorAll('.scene-btn').forEach(btn => btn.style.display = isChallengeMode ? 'none' : 'inline-block');
+                    
                     if (isChallengeMode) {
                         btn.innerText = "退出訓練模式"; scoreDisplay.style.display = "block";
                         questionsDone = 0; totalScore = 0; sessionScores = []; updateScoreUI();
@@ -567,6 +607,61 @@
                     } else {
                         btn.innerText = "開啟聽能定向挑戰"; scoreDisplay.style.display = "none"; hint.style.opacity = 0; challengeState = 'idle';
                     }
+                } else if (actionStr === 'tutorial') {
+                    if (isChallengeMode) return;
+                    stopAllSounds(true);
+                    isChallengeMode = true; 
+                    challengeState = 'tutorial';
+                    
+                    document.getElementById('mode-selection').style.display = "none";
+                    document.getElementById('scene-controls').style.display = "none";
+                    document.getElementById('challenge-hint').style.opacity = 1;
+
+                    const originalScene = currentScene;
+                    activeSoundType = WAVE_TYPES.BELL; 
+
+                    const runTutorialStep = (text, angle, dist, sceneId, delay) => {
+                        return new Promise(resolve => {
+                            document.getElementById('challenge-hint').innerHTML = text;
+                            if (sceneId && sceneId !== currentScene) window.setScene(sceneId); 
+                            
+                            if (angle !== null) {
+                                const pt = getTutorialCoords(angle, dist || 1.0);
+                                if (challengeTarget) challengeTarget.cleanup();
+                                challengeTarget = new DraggableSound(activeSoundType, pt.x, pt.y);
+                                challengeTarget.isTutorialObject = true;
+                                challengeTarget.play();
+                            }
+                            setTimeout(resolve, delay);
+                        });
+                    };
+
+                    (async () => {
+                        await runTutorialStep("歡迎來到聽能訓練！<br><span style='font-size:16px'>這裡的操作全靠『游標懸停』，無需點擊滑鼠</span>", null, null, 'bathroom', 3000);
+                        
+                        await runTutorialStep("【第一階段：方位】<br>現在測試：正前方 (0°)<br><span style='font-size:16px; color:#44ffaa'>聲音較為明亮、無遮蔽感</span>", 0, 1.0, 'bathroom', 3500);
+                        await runTutorialStep("現在測試：正後方 (180°)<br><span style='font-size:16px; color:#ff4444'>高頻明顯衰減，模擬被後腦勺擋住</span>", 180, 1.0, 'bathroom', 3500);
+                        await runTutorialStep("現在測試：正右方 (90°)<br><span style='font-size:16px; color:#10dcff'>聲音明顯偏向右耳</span>", 90, 1.0, 'bathroom', 3000);
+                        await runTutorialStep("現在測試：正左方 (270°)<br><span style='font-size:16px; color:#10dcff'>聲音明顯偏向左耳</span>", 270, 1.0, 'bathroom', 3000);
+
+                        await runTutorialStep("【第二階段：距離】<br>現在測試：極近距離 (0.5m)<br><span style='font-size:16px; color:#ffaa44'>直達音大，幾乎沒有環境殘響</span>", 0, 0.5, 'bathroom', 4000);
+                        await runTutorialStep("現在測試：極遠距離 (3.0m)<br><span style='font-size:16px; color:#ffaa44'>直達音衰減，環境反射音比例大幅增加</span>", 0, 3.0, 'bathroom', 4000);
+
+                        await runTutorialStep("【第三階段：聲場環境】<br>現在空間為：清澈水域 (一般室內)<br><span style='font-size:16px; color:#bb66ff'>空間較小，尾音收得快</span>", 0, 2.0, 'bathroom', 4000);
+                        await runTutorialStep("現在空間切換為：幽暗海洞 (天然山洞)<br><span style='font-size:16px; color:#bb66ff'>注意聆聽深邃的低頻與綿長的反射尾音</span>", 0, 2.0, 'cave', 4500);
+
+                        await runTutorialStep("教學結束！<br><span style='font-size:16px'>你可以自由選取右側音源進行探索，或是開始挑戰</span>", null, null, null, 3000);
+
+                        if (challengeTarget) { challengeTarget.cleanup(); challengeTarget = null; }
+                        isChallengeMode = false;
+                        challengeState = 'idle';
+                        window.setScene(originalScene);
+                        
+                        document.getElementById('mode-selection').style.display = "flex";
+                        document.getElementById('scene-controls').style.display = "flex";
+                        document.getElementById('challenge-hint').style.opacity = 0;
+                    })();
+                    
                 } else if (actionStr.startsWith('scene-')) {
                     const s = actionStr.split('-')[1]; window.setScene(s);
                 } else if (actionStr === 'start_play') {
@@ -588,7 +683,7 @@
                     const pId = actionStr.split('-')[1];
                     const typeInfo = Object.values(WAVE_TYPES).find(t => t.id === pId);
                     if (typeInfo) {
-                        stopAllSounds(true);
+                        stopAllSounds(true); // 清除舊聲音
                         activeSoundType = typeInfo;
                         const n = new DraggableSound(activeSoundType, pointerX, pointerY); 
                         activeObjects.push(n); n.play();
@@ -618,7 +713,7 @@
                     this.trajectory.push({x: this.x, y: this.y}); 
                 } else {
                     challengeState = 'waiting_for_guess'; this.muteChallenge();
-                    hint.innerHTML = "聲音已停止<br><span style='font-size:16px; color:#fff'>請將游標移至聲源最後消失的位置，並停留 1 秒確認</span>";
+                    hint.innerHTML = "聲音已停止<br><span style='font-size:16px; color:#fff'>請將游標移至聲源最後消失的位置，並停留 1.2 秒確認</span>";
                 }
             };
             challengeTarget.play();
@@ -716,7 +811,6 @@
                     if (challengeState === 'feedback' && Math.sqrt((pointerX - screenCenterHitArea.x)**2 + (pointerY - screenCenterHitArea.y)**2) < screenCenterHitArea.r) { newTarget = { type: 'canvas', action: 'next_round' }; }
                     if (challengeState === 'waiting_for_guess') {
                         // 在猜題階段，只要游標靜止在畫面上任何地方，就開始計時作為答案
-                        // 排除 UI 區域
                         if (pointerY < height - 80 && pointerX > 20) {
                             newTarget = { type: 'canvas', action: 'guess_target' };
                         }
@@ -730,14 +824,13 @@
                 }
             }
 
-            // 防抖動：游標移動超過一定距離才重置猜題計時
+            // 防抖動機制：在作答或拖曳時，確保游標沒有大範圍移動才繼續計時
             if (newTarget) {
                 if (!hoverTarget || hoverTarget.action !== newTarget.action) { 
                     hoverTarget = newTarget; hoverStartTime = Date.now(); hasTriggered = false; 
                 } else if (challengeState === 'waiting_for_guess') {
-                    // 如果正在猜題，確保游標沒有大範圍移動才繼續計時
                     if (Math.abs(pointerX - (hoverTarget.lastX||pointerX)) > 15 || Math.abs(pointerY - (hoverTarget.lastY||pointerY)) > 15) {
-                        hoverStartTime = Date.now(); // 游標亂動就重置計時
+                        hoverStartTime = Date.now(); 
                     }
                     hoverTarget.lastX = pointerX; hoverTarget.lastY = pointerY;
                 }
@@ -751,16 +844,21 @@
             activeObjects.forEach(obj => { obj.update(); obj.draw(ctx); });
             
             if (challengeTarget) {
-                challengeTarget.update(); challengeTarget.draw(ctx);
-                if (challengeState === 'feedback' || challengeState === 'replaying') {
-                    ctx.beginPath(); ctx.strokeStyle = `rgba(${challengeTarget.rgb}, 0.4)`; ctx.lineWidth = 2; ctx.setLineDash([8, 4]);
-                    challengeTarget.trajectory.forEach((p, i) => { if(i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y); });
-                    ctx.stroke(); ctx.setLineDash([]);
-                    ctx.beginPath(); const beamGrad = ctx.createLinearGradient(centerX, centerY, challengeTarget.x, challengeTarget.y);
-                    beamGrad.addColorStop(0, 'rgba(100, 220, 255, 0.1)'); beamGrad.addColorStop(1, `rgba(${challengeTarget.rgb}, 0.8)`);
-                    ctx.strokeStyle = beamGrad; ctx.lineWidth = 3; ctx.moveTo(centerX, centerY); ctx.lineTo(challengeTarget.x, challengeTarget.y); ctx.stroke();
-                    ctx.fillStyle = "#ff4444"; ctx.shadowBlur = 10; ctx.shadowColor = "#ff0000";
-                    ctx.beginPath(); ctx.arc(lastGuessX, lastGuessY, 6, 0, Math.PI*2); ctx.fill(); ctx.shadowBlur = 0;
+                challengeTarget.update(); 
+                if (challengeTarget.isTutorialObject) {
+                    challengeTarget.draw(ctx);
+                } else {
+                    challengeTarget.draw(ctx);
+                    if (challengeState === 'feedback' || challengeState === 'replaying') {
+                        ctx.beginPath(); ctx.strokeStyle = `rgba(${challengeTarget.rgb}, 0.4)`; ctx.lineWidth = 2; ctx.setLineDash([8, 4]);
+                        challengeTarget.trajectory.forEach((p, i) => { if(i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y); });
+                        ctx.stroke(); ctx.setLineDash([]);
+                        ctx.beginPath(); const beamGrad = ctx.createLinearGradient(centerX, centerY, challengeTarget.x, challengeTarget.y);
+                        beamGrad.addColorStop(0, 'rgba(100, 220, 255, 0.1)'); beamGrad.addColorStop(1, `rgba(${challengeTarget.rgb}, 0.8)`);
+                        ctx.strokeStyle = beamGrad; ctx.lineWidth = 3; ctx.moveTo(centerX, centerY); ctx.lineTo(challengeTarget.x, challengeTarget.y); ctx.stroke();
+                        ctx.fillStyle = "#ff4444"; ctx.shadowBlur = 10; ctx.shadowColor = "#ff0000";
+                        ctx.beginPath(); ctx.arc(lastGuessX, lastGuessY, 6, 0, Math.PI*2); ctx.fill(); ctx.shadowBlur = 0;
+                    }
                 }
             }
             
