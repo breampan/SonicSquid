@@ -145,6 +145,7 @@
 
         let audioCtx;
         let convolver, masterCompressor;
+        let distCurve = null; 
         
         let currentScene = 'bathroom';
         let currentRadius = 1.0;
@@ -183,7 +184,6 @@
             forest: { main: '#44ffaa', bg: '#02150a', gridAlpha: 0.06, flow: 0.65, length: 2.2, decay: 4.0, lp: 3000, baseDry: 1.0, baseWet: 0.3 }
         };
 
-        // 重新定義具象的音源類型與圖示代碼
         const WAVE_TYPES = {
             BELL: { id: 'bell', color: '100, 220, 255', norm: 0.8 },
             ROTOR: { id: 'rotor', color: '255, 204, 170', norm: 1.0 },
@@ -195,6 +195,20 @@
         let paletteIcons = [];
         let noiseBuffer = null;
         let audioPlayer = null; 
+
+        function makeDistortionCurve(amount) {
+            let k = typeof amount === 'number' ? amount : 50,
+                n_samples = 44100,
+                curve = new Float32Array(n_samples),
+                deg = Math.PI / 180,
+                i = 0,
+                x;
+            for ( ; i < n_samples; ++i ) {
+                x = i * 2 / n_samples - 1;
+                curve[i] = ( 3 + k ) * x * 20 * deg / ( Math.PI + k * Math.abs(x) );
+            }
+            return curve;
+        }
 
         window.unlockAudioAndStart = () => {
             if (isSystemUnlocked) return;
@@ -249,6 +263,8 @@
                     convolver = audioCtx.createConvolver();
                     convolver.connect(masterCompressor);
                     
+                    distCurve = makeDistortionCurve(15); 
+                    
                     const bufferSize = audioCtx.sampleRate * 2; 
                     noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
                     const output = noiseBuffer.getChannelData(0);
@@ -290,7 +306,7 @@
 
         class DirectionalPlayer {
             constructor() { 
-                this.nodes = []; // 用來統一管理需要 stop() 的節點
+                this.nodes = [];
                 this.gain = null; 
                 this.panner = null; 
                 this.dryGain = null;
@@ -302,18 +318,17 @@
                 this.gain = audioCtx.createGain(); 
                 this.panner = audioCtx.createPanner();
                 
-                // 真實解剖學濾波陣列 (Anatomical EQ)
-                const conchaBoost = audioCtx.createBiquadFilter(); // 耳甲腔
+                const conchaBoost = audioCtx.createBiquadFilter(); 
                 conchaBoost.type = 'peaking';
                 conchaBoost.frequency.value = 3500;
                 conchaBoost.Q.value = 1.5;
                 
-                const pinnaNotch = audioCtx.createBiquadFilter();  // 耳廓凹陷
+                const pinnaNotch = audioCtx.createBiquadFilter();  
                 pinnaNotch.type = 'peaking';
                 pinnaNotch.frequency.value = 8000;
                 pinnaNotch.Q.value = 3.0;
 
-                const headShadow = audioCtx.createBiquadFilter();  // 頭部遮蔽
+                const headShadow = audioCtx.createBiquadFilter();  
                 headShadow.type = 'lowpass';
 
                 this.panner.panningModel = 'HRTF';
@@ -345,7 +360,6 @@
                 this.wetGain = audioCtx.createGain();
                 
                 const sceneCfg = SCENE_CONFIG[currentScene];
-                // 修正距離衰減，確保 3.0m 時依然有足夠清晰的音量
                 const directAttenuation = Math.max(0.2, 1.0 / (1.0 + distance * 0.8)); 
                 const reverbAccumulation = Math.min(1.5, distance * 0.5); 
 
@@ -360,9 +374,7 @@
                 this.gain.gain.setValueAtTime(targetVol, Math.max(now + attackTime, end - releaseTime));
                 this.gain.gain.linearRampToValueAtTime(0.0001, end);
 
-                // 根據新音源類型生成聲音
                 if (typeConfig.id === 'bell') {
-                    // 銅鐘敲擊 (Bell) - 豐富高頻與金屬感
                     const freqs = [440, 880, 1320, 1760];
                     freqs.forEach((freq, i) => {
                         let osc = audioCtx.createOscillator();
@@ -370,7 +382,6 @@
                         osc.type = i % 2 === 0 ? 'sine' : 'triangle';
                         osc.frequency.value = freq;
                         
-                        // 打擊感 envelope
                         oscGain.gain.setValueAtTime(0, now);
                         oscGain.gain.linearRampToValueAtTime(1.0 / (i+1), now + 0.02);
                         oscGain.gain.exponentialRampToValueAtTime(0.001, end);
@@ -381,18 +392,16 @@
                         this.nodes.push(osc);
                     });
                 } else if (typeConfig.id === 'rotor') {
-                    // 螺旋槳 (Rotor) - 震動感強烈
                     let osc = audioCtx.createOscillator();
                     osc.type = 'sawtooth';
                     osc.frequency.value = 120;
                     
                     let lfo = audioCtx.createOscillator();
                     lfo.type = 'sine';
-                    lfo.frequency.value = 12.0; // 快速旋轉
+                    lfo.frequency.value = 12.0; 
                     let lfoGain = audioCtx.createGain();
                     lfoGain.gain.value = 0.8;
                     
-                    // LFO 控制音量 (Amplitude Modulation)
                     let amNode = audioCtx.createGain();
                     amNode.gain.value = 0;
                     
@@ -413,7 +422,6 @@
                     osc.stop(end); lfo.stop(end);
                     this.nodes.push(osc, lfo);
                 } else if (typeConfig.id === 'wind') {
-                    // 海浪/風聲 (Wind) - 寬頻濾波掃描
                     let src = audioCtx.createBufferSource();
                     src.buffer = noiseBuffer;
                     src.loop = true;
@@ -421,7 +429,6 @@
                     let filter = audioCtx.createBiquadFilter();
                     filter.type = 'bandpass';
                     filter.Q.value = 1.0;
-                    // 模擬風聲的起伏
                     filter.frequency.setValueAtTime(400, now);
                     filter.frequency.exponentialRampToValueAtTime(3000, now + duration/2);
                     filter.frequency.exponentialRampToValueAtTime(400, end);
@@ -431,18 +438,17 @@
                     src.start(now); src.stop(end);
                     this.nodes.push(src);
                 } else if (typeConfig.id === 'frog') {
-                    // 蛙鳴/生物 (Frog) - 節奏性的方波濾波
                     let osc = audioCtx.createOscillator();
                     osc.type = 'square';
                     osc.frequency.value = 250;
                     
                     let filter = audioCtx.createBiquadFilter();
                     filter.type = 'lowpass';
-                    filter.Q.value = 8.0; // 高 Q 值產生「哇」的聲音
+                    filter.Q.value = 8.0; 
                     
                     let lfo = audioCtx.createOscillator();
                     lfo.type = 'sawtooth';
-                    lfo.frequency.value = 3.0; // 節奏
+                    lfo.frequency.value = 3.0; 
                     let lfoGain = audioCtx.createGain();
                     lfoGain.gain.value = 2000;
                     
@@ -523,7 +529,9 @@
             totalScore += roundScore; document.getElementById('score-display').innerText = `總積分: ${totalScore}`;
             const nextT = (currentRound >= MAX_ROUNDS) ? "懸停此處看總結算" : "懸停此處進入下一題";
             document.getElementById('center-hint').innerHTML = `<div class="feedback-score" style="color:${color}">+${roundScore} 分</div>${feedbackText}<br><span style='font-size:16px; color:#fff'>${nextT}</span>`;
-            nextBtnHitArea = { x: centerX, y: centerY - 20 * uiScale, r: 70 * uiScale };
+            
+            // 修正 1：把「下一題」的判定熱區鎖定在正中央文字處
+            nextBtnHitArea = { x: centerX, y: height * 0.42, r: 80 * uiScale };
         }
 
         function executeAction(actionStr) {
@@ -551,7 +559,6 @@
                     const originalScene = currentScene;
                     const originalType = activeSoundType;
                     
-                    // 教學固定使用鈴聲(最清晰)
                     activeSoundType = WAVE_TYPES.BELL; 
 
                     const runTutorialStep = (text, angle, dist, sceneId, delay) => {
@@ -628,7 +635,9 @@
                     challengeState = 'preparing'; 
                     document.getElementById('center-hint').innerHTML = `準備好了嗎？<br><span style='font-size:16px; color:#fff'>懸停此處開始 ${activeSteps} 方位挑戰</span>`;
                     document.getElementById('center-hint').style.opacity = 1;
-                    nextBtnHitArea = { x: centerX, y: centerY, r: 80 * uiScale };
+                    
+                    // 修正 1：把「開始挑戰」的判定熱區鎖定在正中央文字處
+                    nextBtnHitArea = { x: centerX, y: height * 0.42, r: 80 * uiScale };
                 } else if (actionStr === 'exit') {
                     isChallengeMode = false;
                     document.getElementById('mode-selection').style.display = "flex"; document.getElementById('exit-btn').style.display = "none";
@@ -703,7 +712,6 @@
             uiScale = Math.min(1.0, width / 1000) + 0.2; iconSize = Math.max(16, Math.min(28, width * 0.05));
             displayRadiusX = Math.min(width * 0.4, height * 0.38); displayRadiusY = displayRadiusX * 0.75; 
             
-            // 更新調色盤圖示的排版
             paletteIcons = [
                 { typeConfig: WAVE_TYPES.BELL, x: width - iconSize * 2.5, y: height * 0.25 }, 
                 { typeConfig: WAVE_TYPES.ROTOR, x: width - iconSize * 2.5, y: height * 0.40 }, 
@@ -732,9 +740,6 @@
             ctx.beginPath(); ctx.arc(centerX, centerY - 8, 10, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); ctx.restore();
         }
 
-        // ==========================================
-        // 全新繪製的具象音源圖示
-        // ==========================================
         function drawGeometry(ctx, type, x, y, baseSize, rgbStr, alpha = 1.0, pulse = 0, extraScale = 1.0) {
             const breath = 1.0 + Math.sin(pulse * 2.5) * 0.08;
             let currentSize = baseSize * extraScale * breath; 
@@ -752,21 +757,18 @@
             ctx.lineCap = 'round';
 
             if (type === 'bell') { 
-                // 鐘罩圖示
                 ctx.beginPath();
-                ctx.arc(0, 0, currentSize*0.6, Math.PI, 0); // 上半圓
-                ctx.lineTo(currentSize*0.8, currentSize*0.5); // 右下襬
-                ctx.lineTo(-currentSize*0.8, currentSize*0.5); // 左下襬
+                ctx.arc(0, 0, currentSize*0.6, Math.PI, 0); 
+                ctx.lineTo(currentSize*0.8, currentSize*0.5); 
+                ctx.lineTo(-currentSize*0.8, currentSize*0.5); 
                 ctx.closePath();
                 ctx.fill(); ctx.stroke();
-                // 鐘擺
                 ctx.beginPath();
                 ctx.arc(0, currentSize*0.7, currentSize*0.2, 0, Math.PI*2);
                 ctx.stroke();
             }
             else if (type === 'rotor') { 
-                // 螺旋槳圖示
-                ctx.rotate(pulse * 2.0); // 快速旋轉
+                ctx.rotate(pulse * 2.0); 
                 for(let i=0; i<4; i++) {
                     ctx.rotate(Math.PI/2);
                     ctx.beginPath();
@@ -776,7 +778,6 @@
                 ctx.beginPath(); ctx.arc(0, 0, currentSize*0.3, 0, Math.PI*2); ctx.fill();
             }
             else if (type === 'wind') { 
-                // 風/波浪圖示
                 ctx.translate(-currentSize*0.6, 0);
                 for(let i=0; i<3; i++) {
                     let yOff = (i-1) * currentSize*0.4;
@@ -787,8 +788,7 @@
                 }
             }
             else if (type === 'frog') { 
-                // 生物/青蛙眼睛圖示
-                const pulseEye = Math.abs(Math.sin(pulse * 6)); // 眨眼動畫
+                const pulseEye = Math.abs(Math.sin(pulse * 6)); 
                 ctx.beginPath();
                 ctx.ellipse(-currentSize*0.4, 0, currentSize*0.4, currentSize*0.3 * (1-pulseEye*0.5), 0, 0, Math.PI*2);
                 ctx.ellipse(currentSize*0.4, 0, currentSize*0.4, currentSize*0.3 * (1-pulseEye*0.5), 0, 0, Math.PI*2);
@@ -803,6 +803,7 @@
         }
 
         function drawReplayButton(x, y, colorStr, isHovered) {
+            // 確保按鈕的 Hit Area 有同步更新
             const r = 24 * uiScale; replayBtnHitArea = { x, y, r };
             ctx.save(); ctx.translate(x, y);
             ctx.shadowBlur = isHovered ? 20 : 8; ctx.shadowColor = `rgba(${colorStr}, 0.6)`;
@@ -858,7 +859,7 @@
                 }
                 if (!newTarget && isChallengeMode) {
                     if (challengeState === 'feedback' && Math.sqrt((pointerX - nextBtnHitArea.x)**2 + (pointerY - nextBtnHitArea.y)**2) < nextBtnHitArea.r) { newTarget = { type: 'canvas', action: 'next_round' }; }
-                    if (challengeState === 'preparing' && Math.sqrt((pointerX - centerX)**2 + (pointerY - centerY)**2) < 80 * uiScale) { newTarget = { type: 'canvas', action: 'start_play' }; }
+                    if (challengeState === 'preparing' && Math.sqrt((pointerX - centerX)**2 + (pointerY - nextBtnHitArea.y)**2) < nextBtnHitArea.r) { newTarget = { type: 'canvas', action: 'start_play' }; }
                 }
                 if (!newTarget && !isChallengeMode) {
                     for (let i = 0; i < paletteIcons.length; i++) {
@@ -932,7 +933,8 @@
             }
             
             if (isChallengeMode && (challengeState === 'guessing' || challengeState === 'feedback' || challengeState === 'replaying')) { 
-                drawReplayButton(centerX, centerY + 105 * uiScale, renderType.color, hoverTarget && hoverTarget.action === 'replay_sound'); 
+                // 修正 2：徹底把「再聽一次」按鈕移到螢幕最下方安全區
+                drawReplayButton(centerX, height - 110, renderType.color, hoverTarget && hoverTarget.action === 'replay_sound'); 
             }
             
             drawHoverCursor();
