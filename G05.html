@@ -64,7 +64,6 @@
         
         #replay-ui { position: absolute; z-index: 200; display: none; pointer-events: auto; transform: translate(-50%, 0); }
         
-        /* 修正 1：加上半透明毛玻璃背板並移到畫面上方，徹底解決文字與物件打架的問題 */
         #challenge-hint {
             position: absolute; top: 12%; left: 50%;
             transform: translateX(-50%); color: #fff;
@@ -102,7 +101,7 @@
     </div>
 
     <div id="replay-ui">
-        <button class="action-btn" data-action="start_replay">觀看軌跡複習</button>
+        <button class="action-btn" data-action="start_replay_answer">觀看軌跡複習</button>
     </div>
 
     <div id="report-overlay">
@@ -140,18 +139,16 @@
         let noiseBuffer = null;
         let isSystemUnlocked = false; 
 
-        // 懸停系統變數
         let pointerX = window.innerWidth / 2;
         let pointerY = window.innerHeight / 2;
         let hoverTarget = null;         
         let hoverStartTime = 0;         
         let hasTriggered = false;       
-        const DWELL_DURATION = 1200;
 
         const SCENE_CONFIG = {
             bathroom: { main: '#00ccff', bg: '#021020', gridAlpha: 0.05, flow: 1.0, length: 0.5, decay: 12.0, lp: 12000, baseDry: 0.9, baseWet: 0.5 },
             station: { main: '#ffaa44', bg: '#150a02', gridAlpha: 0.08, flow: 0.35, length: 5.5, decay: 1.2, lp: 6000, baseDry: 0.7, baseWet: 0.8 },
-            cave: { main: '#bb66ff', bg: '#0a0215', gridAlpha: 0.04, flow: 0.2, length: 3.5, decay: 2.5, lp: 800, baseDry: 0.6, baseWet: 1.2 },
+            cave: { main: '#bb66ff', bg: '#0a0215', gridAlpha: 0.04, flow: 0.2, length: 3.5, decay: 2.5, lp: 800, baseDry: 0.7, baseWet: 0.9 }, 
             forest: { main: '#44ffaa', bg: '#02150a', gridAlpha: 0.06, flow: 0.65, length: 2.2, decay: 4.0, lp: 3000, baseDry: 1.0, baseWet: 0.3 }
         };
 
@@ -177,6 +174,7 @@
         let replayIndex = 0;
         
         let screenCenterHitArea = { x: 0, y: 0, r: 0 };
+        let replayBtnHitArea = { x: 0, y: 0, r: 0 };
 
         function makeDistortionCurve(amount) {
             let k = typeof amount === 'number' ? amount : 50,
@@ -185,10 +183,8 @@
             return curve;
         }
 
-        // 修正 2：統一全域座標映射邏輯，保證雷達線與物件絕對對齊
         function getTutorialCoords(angleDeg, dist) {
             const rad = angleDeg * Math.PI / 180;
-            // 音訊空間中：0度正前(Z負)，90度正右(X正)
             const px = Math.sin(rad) * dist;
             const pz = -Math.cos(rad) * dist;
             return {
@@ -209,7 +205,7 @@
                 try {
                     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
                     masterCompressor = audioCtx.createDynamicsCompressor();
-                    masterCompressor.threshold.setValueAtTime(-10, audioCtx.currentTime); 
+                    masterCompressor.threshold.setValueAtTime(-14, audioCtx.currentTime); 
                     masterCompressor.ratio.setValueAtTime(3, audioCtx.currentTime);
                     masterCompressor.connect(audioCtx.destination);
                     
@@ -235,12 +231,27 @@
             const frameCount = Math.floor(sampleRate * cfg.length);
             const buffer = audioCtx.createBuffer(2, frameCount, sampleRate);
             const filterAlpha = Math.min(1.0, (2 * Math.PI * cfg.lp) / sampleRate);
+            
+            let rmsSum = 0;
             for (let ch = 0; ch < 2; ch++) {
                 const data = buffer.getChannelData(ch); let lastVal = 0;
                 for (let i = 0; i < frameCount; i++) {
-                    let iTime = i / sampleRate; lastVal += filterAlpha * ((Math.random() * 2 - 1) - lastVal); data[i] = lastVal * Math.exp(-cfg.decay * iTime) * 0.45;
+                    let iTime = i / sampleRate; 
+                    lastVal += filterAlpha * ((Math.random() * 2 - 1) - lastVal); 
+                    data[i] = lastVal * Math.exp(-cfg.decay * iTime);
+                    rmsSum += data[i] * data[i];
                 }
             }
+            
+            const rms = Math.sqrt(rmsSum / (frameCount * 2));
+            const targetRms = 0.05; 
+            const normalizeFactor = targetRms / (rms || 1);
+            
+            for (let ch = 0; ch < 2; ch++) {
+                const data = buffer.getChannelData(ch);
+                for (let i = 0; i < frameCount; i++) data[i] *= normalizeFactor;
+            }
+            
             convolver.buffer = buffer; 
         }
 
@@ -310,23 +321,19 @@
                 ctx.globalAlpha = p.a; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
             });
             
-            // 修正 3：背景網格透視重構，取消擾動扭曲，確保與物件路徑完美對齊
             ctx.globalAlpha = 1.0;
             ctx.lineWidth = 1; ctx.strokeStyle = cfg.main + '22';
             
-            // 畫 12 條標準放射線 (每 30 度)
             for (let i = 0; i < 12; i++) {
                 const a = (i / 12) * Math.PI * 2;
                 ctx.beginPath(); 
                 ctx.moveTo(centerX, listenerPlaneY); 
-                // 使用與物件相同的透視比例 (displayRadiusX / displayRadiusY)
                 ctx.lineTo(centerX + Math.sin(a) * displayRadiusX * 1.5, listenerPlaneY - Math.cos(a) * displayRadiusY * 1.5); 
                 ctx.stroke();
             }
             
-            // 畫 4 圈距離網格 (代表 0.75m, 1.5m, 2.25m, 3.0m)
             for (let r = 1; r <= 4; r++) {
-                const ringT = t * 0.5 + r; const offset = Math.sin(ringT) * 4; // 保留微弱波紋感，但不影響中心對齊
+                const ringT = t * 0.5 + r; const offset = Math.sin(ringT) * 4; 
                 ctx.beginPath(); 
                 ctx.ellipse(centerX, listenerPlaneY, 
                             displayRadiusX * (r/4) + offset, 
@@ -335,19 +342,61 @@
                 ctx.stroke();
             }
             
-            // 中心點裝飾
             ctx.save(); ctx.shadowBlur = 20; ctx.shadowColor = cfg.main + '55'; ctx.fillStyle = cfg.main + '15'; ctx.strokeStyle = cfg.main + '77';
             ctx.beginPath(); ctx.ellipse(centerX, listenerPlaneY + 10, 32, 13, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
             ctx.beginPath(); ctx.arc(centerX, listenerPlaneY - 12, 13, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); ctx.restore();
         }
 
+        function drawRecycleBin() {
+            if (isChallengeMode || challengeState === 'tutorial') return;
+            const r = 140 * uiScale;
+            ctx.save();
+            ctx.beginPath();
+            ctx.moveTo(width, height);
+            ctx.arc(width, height, r, Math.PI, 1.5 * Math.PI);
+            ctx.closePath();
+            
+            const inZone = (pointerX > width - r && pointerY > height - r);
+            ctx.fillStyle = inZone ? 'rgba(255, 68, 68, 0.4)' : 'rgba(255, 68, 68, 0.1)';
+            ctx.fill();
+            
+            ctx.strokeStyle = 'rgba(255, 68, 68, 0.5)';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            
+            ctx.fillStyle = inZone ? '#fff' : 'rgba(255, 255, 255, 0.5)';
+            ctx.font = `bold ${16*uiScale}px sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.fillText('懸停清除', width - r*0.35, height - r*0.35);
+            ctx.restore();
+        }
+
+        // 繪製獨立的底部按鈕 (重聽用)
+        function drawBottomButton(text, x, y, colorStr, isHovered) {
+            const r = 30 * uiScale; 
+            replayBtnHitArea = { x, y, r };
+            ctx.save(); ctx.translate(x, y);
+            ctx.shadowBlur = isHovered ? 20 : 8; ctx.shadowColor = `rgba(${colorStr}, 0.6)`;
+            ctx.fillStyle = isHovered ? `rgba(${colorStr}, 0.45)` : `rgba(${colorStr}, 0.25)`;
+            ctx.strokeStyle = `rgba(255, 255, 255, 0.85)`; ctx.lineWidth = 2.0;
+            ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+            
+            ctx.fillStyle = "#fff"; const triSize = r * 0.5;
+            ctx.beginPath(); ctx.moveTo(triSize * 0.6, 0); ctx.lineTo(-triSize * 0.4, -triSize * 0.5); ctx.lineTo(-triSize * 0.4, triSize * 0.5); ctx.closePath(); ctx.fill();
+            
+            ctx.font = `bold ${16 * uiScale}px sans-serif`; ctx.textAlign = "center"; ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
+            ctx.fillText(text, 0, r + 26 * uiScale); ctx.restore();
+        }
+
         function drawGeometry(ctx, type, x, y, baseSize, rgbStr, alpha = 1.0, pulse = 0, extraScale = 1.0) {
             const isBehind = y > listenerPlaneY; 
-            // 修正視覺深度映射公式，確保前後方視覺縮放與距離成正比
+            
+            // 修正 1：極致的 3D 透視深度映射 (Perspective Scaling)
             const normX = (x - centerX) / displayRadiusX;
             const normY = (y - listenerPlaneY) / displayRadiusY;
             const distToCenter = Math.sqrt(normX*normX + normY*normY); 
-            const depthFactor = Math.max(0.35, 1.2 - (distToCenter * 0.25)); 
+            // 距離 0 時(中心)放大至近 2 倍，邊緣(3.0m)縮小至 0.5 倍
+            const depthFactor = Math.max(0.4, 2.0 - (distToCenter * 1.5)); 
             
             let currentSize = baseSize * depthFactor * extraScale; 
             if (type === 'bell' || type === 'rotor') currentSize *= 1.15; 
@@ -415,8 +464,8 @@
                 this.nodes = [];
                 this.gain = null; this.panner = null; this.dryGain = null; this.wetGain = null;
                 
-                this.age = 0; 
                 this.fadeSpeed = 0.02;
+                this.deleteTimer = 0;
             }
             play() {
                 if (!audioCtx) return; const now = audioCtx.currentTime;
@@ -439,6 +488,13 @@
                 this.panner.rolloffFactor = 1.5;   
                 
                 this.gain.gain.value = 0.0001;
+
+                this.exciter = audioCtx.createBufferSource();
+                this.exciter.buffer = noiseBuffer; this.exciter.loop = true;
+                const exciterFilter = audioCtx.createBiquadFilter(); exciterFilter.type = 'highpass'; exciterFilter.frequency.value = 3000;
+                const exciterGainNode = audioCtx.createGain(); exciterGainNode.gain.value = 0.04; 
+                this.exciter.connect(exciterFilter); exciterFilter.connect(exciterGainNode); exciterGainNode.connect(this.conchaBoost);
+                this.exciter.start(now); this.nodes.push({type: 'src', node: this.exciter});
 
                 if (this.type === 'bell') {
                     const freqs = [600, 1200, 2400, 4800];
@@ -492,19 +548,18 @@
                 if (!this.gain || !audioCtx) return;
                 const now = audioCtx.currentTime;
                 this.isFading = true; this.isMuted = true;
-                const fadeDuration = fast ? 2.0 : 4.0; 
+                const fadeDuration = fast ? 1.0 : 4.0; 
                 const timeConstant = fadeDuration / 3.5; 
                 this.gain.gain.cancelScheduledValues(now);
                 this.gain.gain.setTargetAtTime(0, now, timeConstant); 
                 this.fadeSpeed = 1.0 / (fadeDuration * 60);
-                setTimeout(() => this.cleanup(), fadeDuration * 1000 + 500);
+                setTimeout(() => this.cleanup(), fadeDuration * 1000 + 200);
             }
 
             updatePanner(isInit = false) {
                 if (!this.panner || !audioCtx || this.isMuted) return; 
                 const now = audioCtx.currentTime;
                 
-                // 修正：動態版的 Audio Mapping 也必須跟隨 displayRadius 換算
                 const posX = (this.smoothedX - centerX) / displayRadiusX * 3.0;
                 const posZ = (this.smoothedY - listenerPlaneY) / displayRadiusY * 3.0;
                 
@@ -571,12 +626,18 @@
                 }
                 else if (!this.isChallengeObject) { 
                     if (!this.isFading) {
-                        this.age += 16.6; 
                         this.x = pointerX; this.y = pointerY;
                         this.smoothedX += (this.x - this.smoothedX) * 0.22;
                         this.smoothedY += (this.y - this.smoothedY) * 0.22; 
                         this.updatePanner(); 
-                        if (this.age > 8000) this.startFadeOut(true);
+                        
+                        const clearRadius = 140 * uiScale;
+                        if (this.x > width - clearRadius && this.y > height - clearRadius) {
+                            this.deleteTimer = (this.deleteTimer || 0) + 16.6;
+                            if (this.deleteTimer > 300) this.startFadeOut(true);
+                        } else {
+                            this.deleteTimer = 0;
+                        }
                     }
                 }
                 else if (this.isChallengeObject && challengeState === 'listening') { 
@@ -585,15 +646,21 @@
                     this.smoothedY += (this.y - this.smoothedY) * 0.5; 
                     this.updatePanner(); 
                 }
-                else if (this.isChallengeObject && challengeState === 'replaying') {
+                else if (this.isChallengeObject && (challengeState === 'replaying_answer' || challengeState === 'replaying_question')) {
                     if (replayIndex < this.trajectory.length) {
                         const p = this.trajectory[replayIndex]; this.x = p.x; this.y = p.y;
                         this.smoothedX += (this.x - this.smoothedX) * 0.5; this.smoothedY += (this.y - this.smoothedY) * 0.5;
                         this.updatePanner(); replayIndex += 2; 
                     } else { 
-                        challengeState = 'feedback'; this.muteChallenge(); positionReplayButton();
-                        document.getElementById('challenge-hint').innerHTML = "複習結束<br><span style='font-size:16px; color:#fff'>懸停畫面中央繼續" + (questionsDone < 5 ? "下一題" : "看報告") + "</span>"; 
-                        screenCenterHitArea = { x: centerX, y: height * 0.45, r: 80 * uiScale };
+                        this.muteChallenge(); 
+                        if (challengeState === 'replaying_question') {
+                            challengeState = 'waiting_for_guess';
+                            document.getElementById('challenge-hint').innerHTML = "聲音已停止<br><span style='font-size:16px; color:#fff'>請將游標移至聲源最後消失的位置，穩定停留 2.5 秒確認作答</span>";
+                        } else {
+                            challengeState = 'feedback'; positionReplayButton();
+                            document.getElementById('challenge-hint').innerHTML = "複習結束<br><span style='font-size:16px; color:#fff'>懸停畫面中央繼續" + (questionsDone < 5 ? "下一題" : "看報告") + "</span>"; 
+                            screenCenterHitArea = { x: centerX, y: height * 0.45, r: 80 * uiScale };
+                        }
                     }
                 }
 
@@ -603,7 +670,8 @@
                 }
             }
             draw(ctx) { 
-                if (this.isChallengeObject && (challengeState === 'listening' || challengeState === 'waiting_for_guess')) return; 
+                // 猜題重聽時不顯示物件軌跡
+                if (this.isChallengeObject && (challengeState === 'listening' || challengeState === 'waiting_for_guess' || challengeState === 'replaying_question')) return; 
                 if (this.life <= 0) return; 
                 drawGeometry(ctx, this.type, this.smoothedX, this.smoothedY, 28 * uiScale, this.rgb, Math.max(0, this.life), this.pulse); 
             }
@@ -674,13 +742,13 @@
                     (async () => {
                         await runTutorialStep("歡迎來到聽能訓練！<br><span style='font-size:16px'>這裡的操作全靠『游標懸停』，無需點擊滑鼠</span>", null, null, 'bathroom', 3000);
                         
-                        await runTutorialStep("【第一階段：方位】<br>現在測試：正前方 (0°)<br><span style='font-size:16px; color:#44ffaa'>聲音明亮，無遮蔽感</span>", 0, 1.5, 'bathroom', 4000);
-                        await runTutorialStep("現在聲音滑行至：正後方 (180°)<br><span style='font-size:16px; color:#ff4444'>高頻被大腦擋住，明顯變悶</span>", 180, 1.5, 'bathroom', 4000);
-                        await runTutorialStep("移至：正右方 (90°)<br><span style='font-size:16px; color:#10dcff'>聲音集中在右耳</span>", 90, 1.5, 'bathroom', 3500);
-                        await runTutorialStep("移至：正左方 (270°)<br><span style='font-size:16px; color:#10dcff'>聲音集中在左耳</span>", 270, 1.5, 'bathroom', 3500);
+                        await runTutorialStep("【第一階段：方位】<br>現在測試：正前方 (0°)<br><span style='font-size:16px; color:#44ffaa'>聲音明亮，無遮蔽感，圖示最大</span>", 0, 1.0, 'bathroom', 4000);
+                        await runTutorialStep("現在聲音滑行至：正後方 (180°)<br><span style='font-size:16px; color:#ff4444'>高頻被大腦擋住，明顯變悶</span>", 180, 1.0, 'bathroom', 4000);
+                        await runTutorialStep("移至：正右方 (90°)<br><span style='font-size:16px; color:#10dcff'>聲音集中在右耳</span>", 90, 1.0, 'bathroom', 3500);
+                        await runTutorialStep("移至：正左方 (270°)<br><span style='font-size:16px; color:#10dcff'>聲音集中在左耳</span>", 270, 1.0, 'bathroom', 3500);
 
-                        await runTutorialStep("【第二階段：距離】<br>現在拉近到：極近距離 (0.5m)<br><span style='font-size:16px; color:#ffaa44'>聲音大且乾，沒有空間反射</span>", 0, 0.5, 'bathroom', 4000);
-                        await runTutorialStep("現在拉遠到：極遠距離 (3.0m)<br><span style='font-size:16px; color:#ffaa44'>音量衰減，殘響(Echo)的包覆感變強</span>", 0, 3.0, 'bathroom', 4000);
+                        await runTutorialStep("【第二階段：距離】<br>現在拉近到：極近距離 (0.5m)<br><span style='font-size:16px; color:#ffaa44'>聲音大且乾，視覺圖示放大</span>", 0, 0.5, 'bathroom', 4000);
+                        await runTutorialStep("現在拉遠到：極遠距離 (3.0m)<br><span style='font-size:16px; color:#ffaa44'>音量衰減，殘響變強，圖示縮小</span>", 0, 3.0, 'bathroom', 4000);
 
                         await runTutorialStep("【第三階段：聲場環境】<br>現在空間為：清澈水域 (一般室內)<br><span style='font-size:16px; color:#bb66ff'>空間較小，尾音收得快</span>", 0, 2.0, 'bathroom', 4000);
                         await runTutorialStep("現在空間切換為：幽暗海洞 (天然山洞)<br><span style='font-size:16px; color:#bb66ff'>注意聆聽深邃的低頻與綿長的反射尾音</span>", 0, 2.0, 'cave', 4500);
@@ -705,11 +773,16 @@
                     if (challengeState !== 'feedback') return; 
                     if (questionsDone >= 5) { showFinalReport(); return; }
                     startNewChallenge();
-                } else if (actionStr === 'start_replay') {
+                } else if (actionStr === 'start_replay_answer') {
                     if (!challengeTarget) return; 
-                    stopAllSounds(true); challengeState = 'replaying'; replayIndex = 0; 
+                    stopAllSounds(true); challengeState = 'replaying_answer'; replayIndex = 0; 
                     document.getElementById('replay-ui').style.display = "none"; 
                     document.getElementById('challenge-hint').innerHTML = "正在進行軌跡複習..."; 
+                    challengeTarget.life = 1.0; challengeTarget.play();
+                } else if (actionStr === 'replay_question') {
+                    if (!challengeTarget) return; 
+                    stopAllSounds(true); challengeState = 'replaying_question'; replayIndex = 0; 
+                    document.getElementById('challenge-hint').innerHTML = "重新聆聽中..."; 
                     challengeTarget.life = 1.0; challengeTarget.play();
                 } else if (actionStr === 'guess_target') {
                     handleChallengeGuess(pointerX, pointerY);
@@ -748,7 +821,7 @@
                     this.trajectory.push({x: this.x, y: this.y}); 
                 } else {
                     challengeState = 'waiting_for_guess'; this.muteChallenge();
-                    hint.innerHTML = "聲音已停止<br><span style='font-size:16px; color:#fff'>請將游標移至聲源最後消失的位置，並停留 1.2 秒確認</span>";
+                    hint.innerHTML = "聲音已停止<br><span style='font-size:16px; color:#fff'>請將游標移至聲源最後消失的位置，並穩定停留 2.5 秒確認作答</span>";
                 }
             };
             challengeTarget.play();
@@ -790,9 +863,8 @@
             centerX = width / 2; centerY = height / 2; listenerPlaneY = height * 0.55; 
             uiScale = Math.min(1.0, width / 1000) + 0.5; iconSize = Math.max(22, Math.min(36, width * 0.075));
             
-            // 精確定義顯示雷達的半徑範圍
             displayRadiusX = Math.min(width * 0.45, height * 0.45); 
-            displayRadiusY = displayRadiusX * 0.65; // 模擬 3D 透視扁平率
+            displayRadiusY = displayRadiusX * 0.65; 
             
             const paletteX = width - iconSize * 1.6;
             paletteIcons = [
@@ -815,12 +887,19 @@
 
             if (hoverTarget && !hasTriggered) {
                 const elapsed = Date.now() - hoverStartTime;
-                const progress = Math.min(1.0, Math.max(0, elapsed / DWELL_DURATION));
-                cursorCtx.strokeStyle = "#44ffaa"; cursorCtx.lineWidth = 4; cursorCtx.lineCap = "round";
+                // 修正 3：智慧雙軌懸停時間 - 答題需要 2.5 秒防止誤觸，一般 UI 只需要 1 秒
+                const requiredDwell = (hoverTarget.action === 'guess_target') ? 2500 : 1000;
+                const progress = Math.min(1.0, Math.max(0, elapsed / requiredDwell));
+                
+                cursorCtx.strokeStyle = hoverTarget.action === 'guess_target' ? "#ffaa44" : "#44ffaa"; 
+                cursorCtx.lineWidth = 4; cursorCtx.lineCap = "round";
                 cursorCtx.beginPath(); cursorCtx.arc(0, 0, 16, -Math.PI/2, -Math.PI/2 + (Math.PI * 2 * progress)); cursorCtx.stroke();
+                
                 if (progress >= 1.0) {
                     hasTriggered = true; executeAction(hoverTarget.action);
-                    cursorCtx.beginPath(); cursorCtx.arc(0, 0, 30, 0, Math.PI*2); cursorCtx.fillStyle = "rgba(68, 255, 170, 0.4)"; cursorCtx.fill();
+                    cursorCtx.beginPath(); cursorCtx.arc(0, 0, 30, 0, Math.PI*2); 
+                    cursorCtx.fillStyle = hoverTarget.action === 'guess_target' ? "rgba(255, 170, 68, 0.4)" : "rgba(68, 255, 170, 0.4)"; 
+                    cursorCtx.fill();
                 }
             }
             cursorCtx.restore();
@@ -836,9 +915,6 @@
                 const rect = btn.getBoundingClientRect();
                 if (pointerX >= rect.left && pointerX <= rect.right && pointerY >= rect.top && pointerY <= rect.bottom) {
                     newTarget = { type: 'html', el: btn, action: btn.getAttribute('data-action') || (btn.id==='mode-toggle'?'toggle_mode':null) };
-                    if(!newTarget.action && btn.innerText.includes('軌跡')) newTarget.action = 'start_replay';
-                    if(!newTarget.action && btn.innerText.includes('再次')) newTarget.action = 'toggle_mode';
-                    
                     btn.classList.add('hovering'); 
                     break; 
                 }
@@ -846,10 +922,16 @@
 
             if (!newTarget) {
                 if (isChallengeMode) {
+                    // 檢查「再聽一次」底部按鈕
+                    if ((challengeState === 'waiting_for_guess' || challengeState === 'replaying_question') && Math.sqrt((pointerX - replayBtnHitArea.x)**2 + (pointerY - replayBtnHitArea.y)**2) < replayBtnHitArea.r) { 
+                        newTarget = { type: 'canvas', action: 'replay_question' }; 
+                    }
                     if (challengeState === 'preparing' && Math.sqrt((pointerX - screenCenterHitArea.x)**2 + (pointerY - screenCenterHitArea.y)**2) < screenCenterHitArea.r) { newTarget = { type: 'canvas', action: 'start_play' }; }
                     if (challengeState === 'feedback' && Math.sqrt((pointerX - screenCenterHitArea.x)**2 + (pointerY - screenCenterHitArea.y)**2) < screenCenterHitArea.r) { newTarget = { type: 'canvas', action: 'next_round' }; }
-                    if (challengeState === 'waiting_for_guess') {
-                        if (pointerY > 50 && pointerX > 20) {
+                    
+                    // 只有在不是游標在 UI 按鈕上時，才觸發畫布的盲猜
+                    if (!newTarget && challengeState === 'waiting_for_guess') {
+                        if (pointerY > 50 && pointerY < height - 120 && pointerX > 20) {
                             newTarget = { type: 'canvas', action: 'guess_target' };
                         }
                     }
@@ -865,7 +947,8 @@
             if (newTarget) {
                 if (!hoverTarget || hoverTarget.action !== newTarget.action) { 
                     hoverTarget = newTarget; hoverStartTime = Date.now(); hasTriggered = false; 
-                } else if (challengeState === 'waiting_for_guess') {
+                } else if (challengeState === 'waiting_for_guess' && hoverTarget.action === 'guess_target') {
+                    // 答題防抖動：游標移動超過 15 像素就重置 2.5 秒的計時器
                     if (Math.abs(pointerX - (hoverTarget.lastX||pointerX)) > 15 || Math.abs(pointerY - (hoverTarget.lastY||pointerY)) > 15) {
                         hoverStartTime = Date.now(); 
                     }
@@ -876,6 +959,8 @@
 
         function animate() {
             drawUnderwaterBackground();
+            drawRecycleBin(); 
+            
             if (!isChallengeMode) { paletteIcons.forEach(p => drawGeometry(ctx, p.typeConfig.id, p.x, p.y, iconSize, p.typeConfig.color, 0.85, Date.now()*0.002)); }
             
             activeObjects.forEach(obj => { obj.update(); obj.draw(ctx); });
@@ -886,7 +971,7 @@
                     challengeTarget.draw(ctx);
                 } else {
                     challengeTarget.draw(ctx);
-                    if (challengeState === 'feedback' || challengeState === 'replaying') {
+                    if (challengeState === 'feedback' || challengeState === 'replaying_answer') {
                         ctx.beginPath(); ctx.strokeStyle = `rgba(${challengeTarget.rgb}, 0.4)`; ctx.lineWidth = 2; ctx.setLineDash([8, 4]);
                         challengeTarget.trajectory.forEach((p, i) => { if(i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y); });
                         ctx.stroke(); ctx.setLineDash([]);
@@ -897,6 +982,11 @@
                         ctx.beginPath(); ctx.arc(lastGuessX, lastGuessY, 6, 0, Math.PI*2); ctx.fill(); ctx.shadowBlur = 0;
                     }
                 }
+            }
+            
+            // 獨立繪製作答時的「再聽一次」按鈕，放遠在畫面最下方安全區
+            if (isChallengeMode && (challengeState === 'waiting_for_guess' || challengeState === 'replaying_question')) {
+                drawBottomButton("再聽一次", centerX, height - 70 * uiScale, '100, 220, 255', hoverTarget && hoverTarget.action === 'replay_question');
             }
             
             checkHoverTargets();
