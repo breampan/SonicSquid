@@ -65,7 +65,7 @@
         #replay-ui { position: absolute; z-index: 200; display: none; pointer-events: auto; transform: translate(-50%, 0); }
         
         #challenge-hint {
-            position: absolute; top: 45%; left: 50%;
+            position: absolute; top: 38%; left: 50%;
             transform: translate(-50%, -50%); color: #64dcff;
             font-size: 22px; pointer-events: none; opacity: 0;
             transition: opacity 0.5s; text-align: center; z-index: 50;
@@ -134,6 +134,7 @@
         let noiseBuffer = null;
         let isSystemUnlocked = false; 
 
+        // 懸停系統變數
         let pointerX = window.innerWidth / 2;
         let pointerY = window.innerHeight / 2;
         let hoverTarget = null;         
@@ -178,16 +179,15 @@
             return curve;
         }
 
-        // ==========================================
-        // 補回遺失的座標映射函數
-        // ==========================================
+        // 精確的座標映射（將距離與角度轉換為全螢幕座標）
         function getTutorialCoords(angleDeg, dist) {
             const rad = angleDeg * Math.PI / 180;
+            // 0度為正前方 (畫面向上，Z為負)
             const px = Math.sin(rad) * dist;
             const pz = -Math.cos(rad) * dist;
             return {
                 x: centerX + (px / 3.0) * (width * 0.4),
-                y: listenerPlaneY + (pz / 3.0) * (height * 0.4)
+                y: listenerPlaneY + (pz / 3.0) * (height * 0.4) // 以 listenerPlaneY 為基準
             };
         }
 
@@ -303,25 +303,28 @@
                 if (p.y < -20) { p.y = height + 20; p.x = Math.random() * width; }
                 ctx.globalAlpha = p.a; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
             });
+            
+            // 修正背景網格：全部對齊 listenerPlaneY 確保聲畫合一
             ctx.globalAlpha = 1.0;
             ctx.lineWidth = 1; ctx.strokeStyle = cfg.main + '22';
             for (let i = 0; i < 24; i++) {
                 const a = (i / 24) * Math.PI * 2 + Math.sin(t * 0.1) * 0.05;
-                ctx.beginPath(); ctx.moveTo(centerX, centerY); ctx.lineTo(centerX + Math.cos(a) * width, centerY + Math.sin(a) * height); ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(centerX, listenerPlaneY); ctx.lineTo(centerX + Math.cos(a) * width, listenerPlaneY + Math.sin(a) * height); ctx.stroke();
             }
             for (let r = 1; r < 7; r++) {
                 const ringT = t * 0.5 + r; const offset = Math.sin(ringT) * 12;
-                ctx.beginPath(); ctx.ellipse(centerX, centerY, Math.max(1, r * 115 + offset), Math.max(1, r * 75 + offset), 0, 0, Math.PI * 2); ctx.stroke();
+                ctx.beginPath(); ctx.ellipse(centerX, listenerPlaneY, Math.max(1, r * 115 + offset), Math.max(1, r * 75 + offset), 0, 0, Math.PI * 2); ctx.stroke();
             }
             ctx.save(); ctx.shadowBlur = 20; ctx.shadowColor = cfg.main + '55'; ctx.fillStyle = cfg.main + '15'; ctx.strokeStyle = cfg.main + '77';
-            ctx.beginPath(); ctx.ellipse(centerX, centerY + 10, 32, 13, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-            ctx.beginPath(); ctx.arc(centerX, centerY - 12, 13, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); ctx.restore();
+            ctx.beginPath(); ctx.ellipse(centerX, listenerPlaneY + 10, 32, 13, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+            ctx.beginPath(); ctx.arc(centerX, listenerPlaneY - 12, 13, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); ctx.restore();
         }
 
         function drawGeometry(ctx, type, x, y, baseSize, rgbStr, alpha = 1.0, pulse = 0, extraScale = 1.0) {
             const isBehind = y > listenerPlaneY; 
-            const dist = Math.sqrt((x - centerX)**2 + (y - centerY)**2);
-            const depthFactor = Math.max(0.3, 1.2 - (dist / (height * 0.6 || 1)));
+            // 修正視覺深度映射基準為 listenerPlaneY
+            const distToCenter = Math.sqrt((x - centerX)**2 + (y - listenerPlaneY)**2);
+            const depthFactor = Math.max(0.3, 1.2 - (distToCenter / (height * 0.5 || 1)));
             
             let currentSize = baseSize * depthFactor * extraScale; 
             if (type === 'bell' || type === 'rotor') currentSize *= 1.15; 
@@ -380,6 +383,7 @@
                 this.type = typeConfig.id; this.rgb = typeConfig.color; this.x = x; this.y = y;
                 this.normFactor = typeConfig.norm || 1.0; 
                 this.smoothedX = x; this.smoothedY = y;
+                this.targetX = x; this.targetY = y; // 給滑行教學用的座標
                 this.isChallengeObject = false; 
                 this.isTutorialObject = false;
                 this.isMuted = false;
@@ -414,16 +418,18 @@
                 this.gain.gain.value = 0.0001;
 
                 if (this.type === 'bell') {
-                    const freqs = [440, 880, 1320, 1760];
+                    // 極度強化高頻泛音，讓 HRTF 有東西可以切
+                    const freqs = [600, 1200, 2400, 4800];
                     freqs.forEach((freq, i) => {
                         let osc = audioCtx.createOscillator(); let oscGain = audioCtx.createGain();
-                        osc.type = i % 2 === 0 ? 'sine' : 'triangle'; osc.frequency.value = freq;
+                        osc.type = i === 3 ? 'sawtooth' : 'sine'; // 最高頻用鋸齒波增加摩擦感
+                        osc.frequency.value = freq;
                         this.nodes.push({type: 'env', gain: oscGain, i: i, lastTrigger: 0});
                         osc.connect(oscGain); oscGain.connect(this.conchaBoost);
                         osc.start(now); this.nodes.push({type: 'osc', node: osc});
                     });
                 } else if (this.type === 'rotor') {
-                    let osc = audioCtx.createOscillator(); osc.type = 'sawtooth'; osc.frequency.value = 120;
+                    let osc = audioCtx.createOscillator(); osc.type = 'sawtooth'; osc.frequency.value = 150;
                     let lfo = audioCtx.createOscillator(); lfo.type = 'sine'; lfo.frequency.value = 12.0; 
                     let lfoGain = audioCtx.createGain(); lfoGain.gain.value = 0.8;
                     let amNode = audioCtx.createGain(); amNode.gain.value = 0;
@@ -486,12 +492,13 @@
                 const distance = Math.max(0.1, Math.sqrt(posX*posX + posZ*posZ));
                 const frontToBackRatio = -posZ / (distance || 1); 
                 
-                this.conchaBoost.gain.setTargetAtTime(frontToBackRatio > 0 ? frontToBackRatio * 5.0 : frontToBackRatio * 4.0, now, tc);
-                this.pinnaNotch.gain.setTargetAtTime(frontToBackRatio < 0 ? frontToBackRatio * 18.0 : 0, now, tc); 
+                // 更極端的實體遮蔽濾波
+                this.conchaBoost.gain.setTargetAtTime(frontToBackRatio > 0 ? frontToBackRatio * 8.0 : 0, now, tc);
+                this.pinnaNotch.gain.setTargetAtTime(frontToBackRatio < 0 ? frontToBackRatio * 24.0 : 0, now, tc); 
                 
-                let baseFreq = 20000 - (distance * 1000);
-                if (frontToBackRatio < 0) baseFreq = baseFreq - Math.abs(frontToBackRatio) * 16000; 
-                this.headShadow.frequency.setTargetAtTime(Math.max(800, baseFreq), now, tc);
+                let baseFreq = 20000 - (distance * 1500);
+                if (frontToBackRatio < 0) baseFreq = baseFreq - Math.abs(frontToBackRatio) * 18000; 
+                this.headShadow.frequency.setTargetAtTime(Math.max(600, baseFreq), now, tc);
 
                 const sceneCfg = SCENE_CONFIG[currentScene];
                 const directAttenuation = Math.max(0.15, 1.0 / (1.0 + distance * 0.8)); 
@@ -535,8 +542,10 @@
                 this.pulse += 0.08;
                 
                 if (this.isTutorialObject) {
-                    this.smoothedX += (this.x - this.smoothedX) * 0.5;
-                    this.smoothedY += (this.y - this.smoothedY) * 0.5;
+                    // 教學模式平滑滑行到新座標
+                    this.smoothedX += (this.targetX - this.smoothedX) * 0.05;
+                    this.smoothedY += (this.targetY - this.smoothedY) * 0.05;
+                    this.x = this.smoothedX; this.y = this.smoothedY;
                     this.updatePanner();
                 }
                 else if (!this.isChallengeObject) { 
@@ -546,9 +555,7 @@
                         this.smoothedX += (this.x - this.smoothedX) * 0.22;
                         this.smoothedY += (this.y - this.smoothedY) * 0.22; 
                         this.updatePanner(); 
-                        if (this.age > 8000) { 
-                            this.startFadeOut(true);
-                        }
+                        if (this.age > 8000) this.startFadeOut(true);
                     }
                 }
                 else if (this.isChallengeObject && challengeState === 'listening') { 
@@ -628,10 +635,17 @@
                             
                             if (angle !== null) {
                                 const pt = getTutorialCoords(angle, dist || 1.0);
-                                if (challengeTarget) challengeTarget.cleanup();
-                                challengeTarget = new DraggableSound(activeSoundType, pt.x, pt.y);
-                                challengeTarget.isTutorialObject = true;
-                                challengeTarget.play();
+                                if (!challengeTarget) {
+                                    challengeTarget = new DraggableSound(activeSoundType, pt.x, pt.y);
+                                    challengeTarget.isTutorialObject = true;
+                                    challengeTarget.targetX = pt.x;
+                                    challengeTarget.targetY = pt.y;
+                                    challengeTarget.play();
+                                } else {
+                                    // 平滑滑行到新位置
+                                    challengeTarget.targetX = pt.x;
+                                    challengeTarget.targetY = pt.y;
+                                }
                             }
                             setTimeout(resolve, delay);
                         });
@@ -640,13 +654,13 @@
                     (async () => {
                         await runTutorialStep("歡迎來到聽能訓練！<br><span style='font-size:16px'>這裡的操作全靠『游標懸停』，無需點擊滑鼠</span>", null, null, 'bathroom', 3000);
                         
-                        await runTutorialStep("【第一階段：方位】<br>現在測試：正前方 (0°)<br><span style='font-size:16px; color:#44ffaa'>聲音較為明亮、無遮蔽感</span>", 0, 1.0, 'bathroom', 3500);
-                        await runTutorialStep("現在測試：正後方 (180°)<br><span style='font-size:16px; color:#ff4444'>高頻明顯衰減，模擬被後腦勺擋住</span>", 180, 1.0, 'bathroom', 3500);
-                        await runTutorialStep("現在測試：正右方 (90°)<br><span style='font-size:16px; color:#10dcff'>聲音明顯偏向右耳</span>", 90, 1.0, 'bathroom', 3000);
-                        await runTutorialStep("現在測試：正左方 (270°)<br><span style='font-size:16px; color:#10dcff'>聲音明顯偏向左耳</span>", 270, 1.0, 'bathroom', 3000);
+                        await runTutorialStep("【第一階段：方位】<br>現在測試：正前方 (0°)<br><span style='font-size:16px; color:#44ffaa'>聲音明亮，無遮蔽感</span>", 0, 1.5, 'bathroom', 4000);
+                        await runTutorialStep("現在聲音滑行至：正後方 (180°)<br><span style='font-size:16px; color:#ff4444'>高頻被大腦擋住，明顯變悶</span>", 180, 1.5, 'bathroom', 4000);
+                        await runTutorialStep("移至：正右方 (90°)<br><span style='font-size:16px; color:#10dcff'>聲音集中在右耳</span>", 90, 1.5, 'bathroom', 3500);
+                        await runTutorialStep("移至：正左方 (270°)<br><span style='font-size:16px; color:#10dcff'>聲音集中在左耳</span>", 270, 1.5, 'bathroom', 3500);
 
-                        await runTutorialStep("【第二階段：距離】<br>現在測試：極近距離 (0.5m)<br><span style='font-size:16px; color:#ffaa44'>直達音大，幾乎沒有環境殘響</span>", 0, 0.5, 'bathroom', 4000);
-                        await runTutorialStep("現在測試：極遠距離 (3.0m)<br><span style='font-size:16px; color:#ffaa44'>直達音衰減，環境反射音比例大幅增加</span>", 0, 3.0, 'bathroom', 4000);
+                        await runTutorialStep("【第二階段：距離】<br>現在拉近到：極近距離 (0.5m)<br><span style='font-size:16px; color:#ffaa44'>聲音大且乾，沒有空間反射</span>", 0, 0.5, 'bathroom', 4000);
+                        await runTutorialStep("現在拉遠到：極遠距離 (3.0m)<br><span style='font-size:16px; color:#ffaa44'>音量衰減，殘響(Echo)的包覆感變強</span>", 0, 3.0, 'bathroom', 4000);
 
                         await runTutorialStep("【第三階段：聲場環境】<br>現在空間為：清澈水域 (一般室內)<br><span style='font-size:16px; color:#bb66ff'>空間較小，尾音收得快</span>", 0, 2.0, 'bathroom', 4000);
                         await runTutorialStep("現在空間切換為：幽暗海洞 (天然山洞)<br><span style='font-size:16px; color:#bb66ff'>注意聆聽深邃的低頻與綿長的反射尾音</span>", 0, 2.0, 'cave', 4500);
