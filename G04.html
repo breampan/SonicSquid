@@ -145,7 +145,7 @@
 
         let audioCtx;
         let convolver, masterCompressor;
-        let distCurve = null; // 用來產生飽和失真的曲線
+        let distCurve = null; 
         
         let currentScene = 'bathroom';
         let currentRadius = 1.0;
@@ -177,7 +177,6 @@
         const SCENE_KEYS = ['bathroom', 'station', 'cave', 'forest'];
         const DISTANCES = [0.5, 1.0, 2.0, 3.0];
         
-        // 移除了全域 dry/wet 比例，改由 DirectionalPlayer 依照距離動態計算
         const SCENE_CONFIG = {
             bathroom: { main: '#00ccff', bg: '#021020', gridAlpha: 0.05, flow: 1.0, length: 0.5, decay: 12.0, lp: 12000, baseDry: 0.8, baseWet: 0.4 },
             station: { main: '#ffaa44', bg: '#150a02', gridAlpha: 0.08, flow: 0.35, length: 5.5, decay: 1.2, lp: 6000, baseDry: 0.6, baseWet: 0.8 },
@@ -197,7 +196,6 @@
         let noiseBuffer = null;
         let audioPlayer = null; 
 
-        // 產生非線性失真曲線 (Harmonic Exciter)
         function makeDistortionCurve(amount) {
             let k = typeof amount === 'number' ? amount : 50,
                 n_samples = 44100,
@@ -265,7 +263,7 @@
                     convolver = audioCtx.createConvolver();
                     convolver.connect(masterCompressor);
                     
-                    distCurve = makeDistortionCurve(15); // 生成適度的泛音飽和曲線
+                    distCurve = makeDistortionCurve(15); 
                     
                     const bufferSize = audioCtx.sampleRate * 2; 
                     noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
@@ -290,7 +288,6 @@
                     let iTime = i / sampleRate; lastVal += filterAlpha * ((Math.random() * 2 - 1) - lastVal); data[i] = lastVal * Math.exp(-cfg.decay * iTime) * 0.45;
                 }
             }
-            // 只換 buffer，真正的空間比例(Dry/Wet)交給 DirectionalPlayer 動態處理
             convolver.buffer = buffer; 
         }
 
@@ -299,7 +296,6 @@
             if (ambianceManager) ambianceManager.playScene(sceneId);
             applySceneAudio(sceneId);
             
-            // 更新 UI 狀態
             document.querySelectorAll('#scene-controls .ctrl-btn').forEach(btn => {
                 btn.classList.remove('active');
                 if(btn.getAttribute('data-action') === 'scene-' + sceneId) btn.classList.add('active');
@@ -324,20 +320,17 @@
                 this.gain = audioCtx.createGain(); 
                 this.panner = audioCtx.createPanner();
                 
-                // ==========================================
-                // 真實解剖學濾波陣列 (Anatomical EQ)
-                // ==========================================
-                const conchaBoost = audioCtx.createBiquadFilter(); // 耳甲腔
+                const conchaBoost = audioCtx.createBiquadFilter(); 
                 conchaBoost.type = 'peaking';
                 conchaBoost.frequency.value = 3500;
                 conchaBoost.Q.value = 1.5;
                 
-                const pinnaNotch = audioCtx.createBiquadFilter();  // 耳廓背部凹陷
+                const pinnaNotch = audioCtx.createBiquadFilter();  
                 pinnaNotch.type = 'peaking';
                 pinnaNotch.frequency.value = 8000;
                 pinnaNotch.Q.value = 3.0;
 
-                const headShadow = audioCtx.createBiquadFilter();  // 頭顱物理遮蔽
+                const headShadow = audioCtx.createBiquadFilter();  
                 headShadow.type = 'lowpass';
 
                 this.panner.panningModel = (typeConfig.id === 'sine') ? 'equalpower' : 'HRTF';
@@ -354,36 +347,26 @@
                     catch (e) { this.panner.setPosition(px, 0, pz); }
                 } else { this.panner.setPosition(px, 0, pz); }
 
-                // 計算前後比例：1.0 = 正前, -1.0 = 正後
                 const frontToBackRatio = -pz / (distance * 2.5 || 1); 
                 
-                // 物理濾波參數連動
                 conchaBoost.gain.value = frontToBackRatio > 0 ? frontToBackRatio * 5.0 : frontToBackRatio * 4.0;
                 pinnaNotch.gain.value = frontToBackRatio < 0 ? frontToBackRatio * 18.0 : 0; 
                 
                 let baseFreq = 20000 - (distance * 1000);
                 if (frontToBackRatio < 0) {
-                    baseFreq = baseFreq - Math.abs(frontToBackRatio) * 16000; // 背後的高頻被徹底擋住
+                    baseFreq = baseFreq - Math.abs(frontToBackRatio) * 16000; 
                 }
                 headShadow.frequency.value = Math.max(800, baseFreq);
-                // ==========================================
 
-                // ==========================================
-                // 動態距離運算 (Dynamic D/R Ratio)
-                // 距離越遠，Dry越小，Wet(殘響)比例越大
-                // ==========================================
                 this.dryGain = audioCtx.createGain();
                 this.wetGain = audioCtx.createGain();
                 
                 const sceneCfg = SCENE_CONFIG[currentScene];
-                // 物理距離平方反比定律模擬 (限制下限避免無聲)
                 const directAttenuation = Math.max(0.05, 1.0 / Math.pow(distance, 1.2)); 
-                // 殘響能量隨距離累積 (空氣中漫射)
                 const reverbAccumulation = Math.min(1.5, distance * 0.4); 
 
                 this.dryGain.gain.value = directAttenuation * sceneCfg.baseDry;
                 this.wetGain.gain.value = reverbAccumulation * sceneCfg.baseWet;
-                // ==========================================
                 
                 const attackTime = 0.05; const releaseTime = 0.15;  
                 const end = now + duration; let targetVol = 0.5 * (typeConfig.norm || 1.0); 
@@ -398,7 +381,6 @@
                     this.modulator = audioCtx.createOscillator(); 
                     this.modGain = audioCtx.createGain();
                     
-                    // 諧波激發器：用 WaveShaper 產生與基頻關聯的高頻泛音
                     const saturator = audioCtx.createWaveShaper();
                     saturator.curve = distCurve;
                     saturator.oversample = '2x';
@@ -409,11 +391,15 @@
                     this.modGain.connect(this.source.frequency);
                     
                     this.source.connect(saturator);
-                    saturator.connect(conchaBoost); // 送入解剖學濾波器
+                    saturator.connect(conchaBoost); 
                     
                     this.modulator.frequency.value = 5.0; 
-                    this.modGain.gain.value = Math.max(0, (1 - distance/4) * (typeConfig.id === 'sine' ? 120 : 250));
-                    this.source.frequency.value = 180 + Math.max(0, 1 - (distance/3)) * 300;
+                    
+                    const harmonicRichness = typeConfig.id === 'sine' ? 280 : 350;
+                    this.modGain.gain.value = Math.max(50, (1 - distance/4) * harmonicRichness);
+                    
+                    // 修正 1：鎖定發聲體基頻音高，不再隨距離改變而走音
+                    this.source.frequency.value = 350; 
                     
                     this.modulator.start(now); this.modulator.stop(end);
                 } else if (typeConfig.id === 'noise') {
@@ -437,14 +423,12 @@
                     this.lfo.start(now); this.lfo.stop(end);
                 }
                 
-                // 串接實體物理路徑
                 conchaBoost.connect(pinnaNotch);
                 pinnaNotch.connect(headShadow);
                 headShadow.connect(this.panner); 
                 
                 this.panner.connect(this.gain); 
                 
-                // 分流至 Dry(直接輸出) 與 Wet(殘響)
                 this.gain.connect(this.dryGain);
                 this.gain.connect(this.wetGain);
                 
@@ -526,7 +510,6 @@
                     document.getElementById('scene-controls').style.display = "none";
                     document.getElementById('center-hint').style.opacity = 1;
 
-                    // 儲存原始狀態以便教學結束後恢復
                     const originalRadius = currentRadius;
                     const originalScene = currentScene;
 
@@ -535,20 +518,18 @@
                             document.getElementById('center-hint').innerHTML = text;
                             
                             if (sceneId && sceneId !== currentScene) {
-                                window.setScene(sceneId); // 同步更新場景按鈕的視覺
+                                window.setScene(sceneId); 
                             }
                             
                             if (angle !== null) {
                                 targetAngleDeg = angle; 
                                 targetDistance = dist || 1.0;
-                                currentRadius = targetDistance; // 讓視覺半徑因子能隨之改變
+                                currentRadius = targetDistance; 
                                 
-                                // 同步更新下方距離按鈕的視覺 Highlight
                                 document.querySelectorAll('#radius-controls .ctrl-btn').forEach(btn => {
                                     btn.classList.remove('active'); 
                                     if(btn.getAttribute('data-action') === `rad-${targetDistance.toFixed(1)}`) {
                                         btn.classList.add('active');
-                                        // 讓按鈕閃爍一下引起注意
                                         btn.style.boxShadow = "0 0 15px #ffaa44";
                                         setTimeout(()=> btn.style.boxShadow = "", 800);
                                     }
@@ -577,14 +558,12 @@
 
                         await runTutorialStep("教學結束！<br><span style='font-size:16px'>你可以自由切換各種參數來進行實戰了</span>", null, null, null, 3000);
 
-                        // 恢復狀態
                         isChallengeMode = false;
                         challengeState = 'idle';
                         targetAngleDeg = null;
                         currentRadius = originalRadius;
                         window.setScene(originalScene);
                         
-                        // 恢復 UI 顯示與 active 狀態
                         document.querySelectorAll('#radius-controls .ctrl-btn').forEach(btn => {
                             btn.classList.remove('active'); 
                             if(btn.getAttribute('data-action') === `rad-${originalRadius.toFixed(1)}`) btn.classList.add('active');
@@ -809,7 +788,8 @@
 
             let targetActiveDist = 1.0;
             if (isChallengeMode) { 
-                if (challengeState === 'idle' || challengeState === 'preparing' || challengeState === 'tutorial') targetActiveDist = 3.0; 
+                // 修正 2：解放 tutorial 模式的視覺鎖定，讓視覺光圈追隨真實的 targetDistance
+                if (challengeState === 'idle' || challengeState === 'preparing') targetActiveDist = 3.0; 
                 else targetActiveDist = targetDistance; 
             } else { targetActiveDist = currentRadius; }
             currentVisualFactor += (getRadiusFactor(targetActiveDist) - currentVisualFactor) * 0.12; 
