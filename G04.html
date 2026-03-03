@@ -306,27 +306,31 @@
         function getRadiusFactor(dist) { if (dist <= 0.5) return 0.25; if (dist <= 1.0) return 0.50; if (dist <= 2.0) return 0.75; return 1.0; }
 
         class DirectionalPlayer {
-            constructor() { this.source = null; this.modulator = null; this.lfo = null; this.gain = null; this.panner = null; }
+            constructor() { 
+                this.source = null; 
+                this.modulator = null; 
+                this.lfo = null; 
+                this.exciter = null; // 新增激發器
+                this.gain = null; 
+                this.panner = null; 
+            }
             play(typeConfig, angleDeg, distance, duration = CONSTANT_DURATION) {
                 if (!audioCtx) return; this.stop(); 
                 const now = audioCtx.currentTime;
                 this.gain = audioCtx.createGain(); 
                 this.panner = audioCtx.createPanner();
                 
-                // ==========================================
-                // 手動仿生濾波陣列 (Psychoacoustic HRTF Injector)
-                // ==========================================
-                const frontBoost = audioCtx.createBiquadFilter(); // 模擬前向耳道共振
+                const frontBoost = audioCtx.createBiquadFilter(); 
                 frontBoost.type = 'peaking';
                 frontBoost.frequency.value = 4000;
                 frontBoost.Q.value = 1.0;
                 
-                const rearNotch = audioCtx.createBiquadFilter();  // 模擬後向耳廓凹陷 (Pinna Notch)
+                const rearNotch = audioCtx.createBiquadFilter();  
                 rearNotch.type = 'peaking';
                 rearNotch.frequency.value = 7500;
                 rearNotch.Q.value = 2.5;
 
-                const air = audioCtx.createBiquadFilter();        // 模擬高頻空氣/頭部遮蔽
+                const air = audioCtx.createBiquadFilter();        
                 air.type = 'lowpass';
 
                 this.panner.panningModel = (typeConfig.id === 'sine') ? 'equalpower' : 'HRTF';
@@ -341,22 +345,15 @@
                     catch (e) { this.panner.setPosition(px, 0, pz); }
                 } else { this.panner.setPosition(px, 0, pz); }
 
-                // 計算前後比例：1.0 = 正前, -1.0 = 正後
                 const frontToBackRatio = -pz / (distance * 2.5 || 1); 
-                
-                // 正前方聲音：4kHz 頻段提亮 +6dB
                 frontBoost.gain.value = Math.max(0, frontToBackRatio) * 6.0;
-                
-                // 正後方聲音：7.5kHz 頻段深深挖出一個 -24dB 的洞
                 rearNotch.gain.value = Math.min(0, frontToBackRatio) * 24.0;
                 
-                // 頭顱遮蔽：越到背後，整體高頻截止點降得越低（最極端降到剩 800Hz 左右）
                 let baseFreq = 20000 - (distance * 2000);
                 if (frontToBackRatio < 0) {
                     baseFreq = baseFreq - Math.abs(frontToBackRatio) * 15000; 
                 }
                 air.frequency.value = Math.max(600, baseFreq);
-                // ==========================================
                 
                 const attackTime = 0.05; const releaseTime = 0.15;  
                 const end = now + duration; let targetVol = 0.4 * (typeConfig.norm || 1.0); 
@@ -372,9 +369,31 @@
                     this.source.connect(frontBoost); 
                     
                     this.modulator.frequency.value = 5.0; 
-                    
                     this.modGain.gain.value = Math.max(0, (1 - distance/4) * (typeConfig.id === 'sine' ? 120 : 250));
                     this.source.frequency.value = 180 + Math.max(0, 1 - (distance/3)) * 300;
+                    
+                    // ==========================================
+                    // 核心修正：空間激發器 (Spatial Exciter)
+                    // 在純音上疊加極微弱的高通噪聲，為 HRTF 濾波器提供載波
+                    // ==========================================
+                    this.exciter = audioCtx.createBufferSource();
+                    this.exciter.buffer = noiseBuffer;
+                    this.exciter.loop = true;
+                    
+                    const exciterFilter = audioCtx.createBiquadFilter();
+                    exciterFilter.type = 'highpass';
+                    exciterFilter.frequency.value = 3000; // 只保留高頻空間線索
+                    
+                    const exciterGainNode = audioCtx.createGain();
+                    exciterGainNode.gain.value = 0.08; // 音量極小，維持正弦波的原始聽感
+                    
+                    this.exciter.connect(exciterFilter);
+                    exciterFilter.connect(exciterGainNode);
+                    exciterGainNode.connect(frontBoost); // 送入仿生濾波器進行空間染色
+                    
+                    this.exciter.start(now); this.exciter.stop(end);
+                    // ==========================================
+                    
                     this.modulator.start(now); this.modulator.stop(end);
                 } else if (typeConfig.id === 'noise') {
                     this.source = audioCtx.createBufferSource(); this.source.buffer = noiseBuffer; this.source.loop = true;
@@ -397,7 +416,6 @@
                     this.lfo.start(now); this.lfo.stop(end);
                 }
                 
-                // 串接濾波器
                 frontBoost.connect(rearNotch);
                 rearNotch.connect(air);
                 air.connect(this.panner); 
@@ -416,9 +434,9 @@
                     this.gain.gain.setValueAtTime(this.gain.gain.value || 0.0001, now);
                     this.gain.gain.linearRampToValueAtTime(0.0001, now + 0.03); 
                 } catch(e){}
-                const _s = this.source; const _m = this.modulator; const _l = this.lfo;
-                setTimeout(() => { try{ if(_s) _s.stop(); if(_m) _m.stop(); if(_l) _l.stop(); }catch(e){} }, 40);
-                this.source = null; this.gain = null;
+                const _s = this.source; const _m = this.modulator; const _l = this.lfo; const _ex = this.exciter;
+                setTimeout(() => { try{ if(_s) _s.stop(); if(_m) _m.stop(); if(_l) _l.stop(); if(_ex) _ex.stop(); }catch(e){} }, 40);
+                this.source = null; this.gain = null; this.exciter = null;
             }
         }
 
