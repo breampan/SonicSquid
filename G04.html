@@ -310,9 +310,25 @@
             play(typeConfig, angleDeg, distance, duration = CONSTANT_DURATION) {
                 if (!audioCtx) return; this.stop(); 
                 const now = audioCtx.currentTime;
-                this.gain = audioCtx.createGain(); this.panner = audioCtx.createPanner();
-                const air = audioCtx.createBiquadFilter(); air.type = 'lowpass';
-                const pinna = audioCtx.createBiquadFilter(); pinna.type = 'highshelf';
+                this.gain = audioCtx.createGain(); 
+                this.panner = audioCtx.createPanner();
+                
+                // ==========================================
+                // 手動仿生濾波陣列 (Psychoacoustic HRTF Injector)
+                // ==========================================
+                const frontBoost = audioCtx.createBiquadFilter(); // 模擬前向耳道共振
+                frontBoost.type = 'peaking';
+                frontBoost.frequency.value = 4000;
+                frontBoost.Q.value = 1.0;
+                
+                const rearNotch = audioCtx.createBiquadFilter();  // 模擬後向耳廓凹陷 (Pinna Notch)
+                rearNotch.type = 'peaking';
+                rearNotch.frequency.value = 7500;
+                rearNotch.Q.value = 2.5;
+
+                const air = audioCtx.createBiquadFilter();        // 模擬高頻空氣/頭部遮蔽
+                air.type = 'lowpass';
+
                 this.panner.panningModel = (typeConfig.id === 'sine') ? 'equalpower' : 'HRTF';
                 this.panner.distanceModel = 'inverse'; this.panner.refDistance = 1.0; this.panner.rolloffFactor = 1.8;   
                 
@@ -325,15 +341,22 @@
                     catch (e) { this.panner.setPosition(px, 0, pz); }
                 } else { this.panner.setPosition(px, 0, pz); }
 
-                // 強化耳廓遮蔽效應，讓前後聽感差異更大
-                const frontToBackRatio = -pz / (distance * 2.5 || 1); // 1.0 = 正前, -1.0 = 正後
-                pinna.gain.value = frontToBackRatio > 0 ? frontToBackRatio * 6.0 : frontToBackRatio * 15.0; 
+                // 計算前後比例：1.0 = 正前, -1.0 = 正後
+                const frontToBackRatio = -pz / (distance * 2.5 || 1); 
                 
+                // 正前方聲音：4kHz 頻段提亮 +6dB
+                frontBoost.gain.value = Math.max(0, frontToBackRatio) * 6.0;
+                
+                // 正後方聲音：7.5kHz 頻段深深挖出一個 -24dB 的洞
+                rearNotch.gain.value = Math.min(0, frontToBackRatio) * 24.0;
+                
+                // 頭顱遮蔽：越到背後，整體高頻截止點降得越低（最極端降到剩 800Hz 左右）
                 let baseFreq = 20000 - (distance * 2000);
                 if (frontToBackRatio < 0) {
-                    baseFreq = baseFreq - Math.abs(frontToBackRatio) * 12000; 
+                    baseFreq = baseFreq - Math.abs(frontToBackRatio) * 15000; 
                 }
-                air.frequency.value = Math.max(400, baseFreq);
+                air.frequency.value = Math.max(600, baseFreq);
+                // ==========================================
                 
                 const attackTime = 0.05; const releaseTime = 0.15;  
                 const end = now + duration; let targetVol = 0.4 * (typeConfig.norm || 1.0); 
@@ -346,7 +369,7 @@
                 if (typeConfig.id === 'sine' || typeConfig.id === 'triangle') {
                     this.source = audioCtx.createOscillator(); this.modulator = audioCtx.createOscillator(); this.modGain = audioCtx.createGain();
                     this.source.type = typeConfig.id; this.modulator.type = 'sine'; this.modulator.connect(this.modGain); this.modGain.connect(this.source.frequency);
-                    this.source.connect(pinna); 
+                    this.source.connect(frontBoost); 
                     
                     this.modulator.frequency.value = 5.0; 
                     
@@ -357,7 +380,7 @@
                     this.source = audioCtx.createBufferSource(); this.source.buffer = noiseBuffer; this.source.loop = true;
                     const filter = audioCtx.createBiquadFilter(); filter.type = 'bandpass'; 
                     filter.Q.value = Math.max(1.5, 25 - (distance * 6)); filter.frequency.value = 4200 - (distance * 600);
-                    this.source.connect(filter); filter.connect(pinna);
+                    this.source.connect(filter); filter.connect(frontBoost);
                 } else if (typeConfig.id === 'boatman') {
                     this.source = audioCtx.createOscillator(); this.source.type = 'sawtooth'; this.source.frequency.value = 3800;
                     this.lfo = audioCtx.createOscillator(); this.lfo.type = 'square'; this.lfo.frequency.value = 15;
@@ -370,10 +393,18 @@
                         } catch(e) {}
                     }
                     this.lfo.connect(lfoG);
-                    const pg = audioCtx.createGain(); this.source.connect(pg); lfoG.connect(pg.gain); pg.connect(pinna);
+                    const pg = audioCtx.createGain(); this.source.connect(pg); lfoG.connect(pg.gain); pg.connect(frontBoost);
                     this.lfo.start(now); this.lfo.stop(end);
                 }
-                pinna.connect(air); air.connect(this.panner); this.panner.connect(this.gain); this.gain.connect(masterDry); this.gain.connect(convolver);
+                
+                // 串接濾波器
+                frontBoost.connect(rearNotch);
+                rearNotch.connect(air);
+                air.connect(this.panner); 
+                this.panner.connect(this.gain); 
+                this.gain.connect(masterDry); 
+                this.gain.connect(convolver);
+                
                 this.source.start(now); this.source.stop(end);
                 setTimeout(() => { if (this.gain) { this.gain.disconnect(); this.gain = null; } }, duration * 1000 + 200);
             }
@@ -518,13 +549,10 @@
                     if (!audioPlayer) audioPlayer = new DirectionalPlayer();
                     audioPlayer.play(targetType, targetAngleDeg, targetDistance, CONSTANT_DURATION);
                     
-                    // 若在回饋階段重新聆聽
                     if (challengeState === 'feedback') {
                         challengeState = 'replaying'; 
                         setTimeout(() => { if(challengeState === 'replaying') challengeState = 'feedback'; }, CONSTANT_DURATION * 1000 + 100);
-                    } 
-                    // 若在作答階段重新聆聽，畫面會回到 listening 狀態暫時變暗
-                    else if (challengeState === 'guessing') {
+                    } else if (challengeState === 'guessing') {
                         challengeState = 'listening';
                         document.getElementById('center-hint').innerHTML = "請閉上眼，專注聆聽..."; 
                         setTimeout(() => { 
@@ -653,7 +681,6 @@
             }
 
             if (!newTarget) {
-                // 修改：讓「再聽一次」按鈕在 guessing、feedback、replaying 階段都能觸發
                 if (isChallengeMode && (challengeState === 'guessing' || challengeState === 'feedback' || challengeState === 'replaying')) {
                     if (Math.sqrt((pointerX - replayBtnHitArea.x)**2 + (pointerY - replayBtnHitArea.y)**2) < replayBtnHitArea.r) { newTarget = { type: 'canvas', action: 'replay_sound' }; }
                 }
@@ -695,4 +722,57 @@
                 if (challengeState === 'idle' || challengeState === 'preparing' || challengeState === 'tutorial') targetActiveDist = 3.0; 
                 else targetActiveDist = targetDistance; 
             } else { targetActiveDist = currentRadius; }
-            currentVisualFactor += (getRadiusFactor(targetActiveDist) - currentVisualFactor) * 0.12;
+            currentVisualFactor += (getRadiusFactor(targetActiveDist) - currentVisualFactor) * 0.12; 
+            
+            drawBackground();
+            const now = Date.now(); const pulse = now * 0.002;
+            paletteIcons.forEach(p => { const isActive = (!isChallengeMode && p.typeConfig.id === activeSoundType.id); drawGeometry(ctx, p.typeConfig.id, p.x, p.y, iconSize, p.typeConfig.color, isActive ? 1.0 : 0.4, pulse, isActive ? 1.2 : 1.0); if (isActive) { ctx.strokeStyle = `rgba(${p.typeConfig.color}, 0.8)`; ctx.beginPath(); ctx.arc(p.x, p.y, iconSize * 2, 0, Math.PI*2); ctx.stroke(); } });
+            
+            const renderType = isChallengeMode && challengeState !== 'tutorial' ? targetType : activeSoundType;
+            let displaySteps = activeSteps;
+            if (!isChallengeMode && hoverTarget && hoverTarget.action && hoverTarget.action.startsWith('mode-')) {
+                displaySteps = parseInt(hoverTarget.action.split('-')[1]);
+            }
+
+            if (renderType) {
+                const stepAngle = 360 / displaySteps;
+                for (let i = 0; i < displaySteps; i++) {
+                    const angle = i * stepAngle; const rad = angle * Math.PI / 180;
+                    const nodeX = centerX + Math.sin(rad) * displayRadiusX * currentVisualFactor;
+                    const nodeY = centerY - Math.cos(rad) * displayRadiusY * currentVisualFactor;
+                    let alpha = 0.2; let scale = 0.8;
+                    
+                    const expectedAction = isChallengeMode ? `guess-${i}` : `playnode-${i}`;
+                    const isNodeHovered = (hoverTarget && hoverTarget.action === expectedAction);
+                    
+                    if (isChallengeMode) {
+                        if (challengeState === 'tutorial') {
+                            if (angle === targetAngleDeg) {
+                                alpha = 1.0; scale = 1.3; ctx.beginPath(); const beam = ctx.createLinearGradient(centerX, centerY, nodeX, nodeY); beam.addColorStop(0, 'rgba(100, 220, 255, 0.1)'); beam.addColorStop(1, `rgba(${renderType.color}, 0.9)`); ctx.strokeStyle = beam; ctx.lineWidth = 3; ctx.moveTo(centerX, centerY); ctx.lineTo(nodeX, nodeY); ctx.stroke();
+                            } else alpha = 0.15;
+                        }
+                        else if (challengeState === 'listening') alpha = 0.05;
+                        else if (challengeState === 'guessing') { alpha = 0.35; if (isNodeHovered) { alpha = 0.9; scale = 1.15 + 0.1 * Math.sin(now / 150); } }
+                        else if (challengeState === 'feedback' || challengeState === 'replaying') { if (Math.abs(angle - targetAngleDeg) < 0.1) { alpha = 1.0; scale = 1.3; ctx.beginPath(); const beam = ctx.createLinearGradient(centerX, centerY, nodeX, nodeY); beam.addColorStop(0, 'rgba(100, 220, 255, 0.1)'); beam.addColorStop(1, `rgba(${renderType.color}, 0.9)`); ctx.strokeStyle = beam; ctx.lineWidth = 3; ctx.moveTo(centerX, centerY); ctx.lineTo(nodeX, nodeY); ctx.stroke(); } else if (i === guessIndex) { alpha = 0.8; ctx.fillStyle = "#ff4444"; ctx.shadowBlur = 15; ctx.shadowColor = "#ff0000"; ctx.beginPath(); ctx.arc(nodeX, nodeY, 8, 0, Math.PI*2); ctx.fill(); ctx.shadowBlur = 0; } else alpha = 0.15; }
+                    } else { if (isNodeHovered) { alpha = 0.9; scale = 1.15 + 0.1 * Math.sin(now / 150); } else alpha = 0.4; }
+                    drawGeometry(ctx, renderType.id, nodeX, nodeY, iconSize, renderType.color, alpha, pulse, scale);
+                }
+            }
+            
+            if (isChallengeMode && (challengeState === 'guessing' || challengeState === 'feedback' || challengeState === 'replaying')) { 
+                drawReplayButton(centerX, centerY + 105 * uiScale, renderType.color, hoverTarget && hoverTarget.action === 'replay_sound'); 
+            }
+            
+            drawHoverCursor();
+            requestAnimationFrame(animate);
+        }
+
+        window.addEventListener('pointerdown', window.unlockAudioAndStart);
+        window.addEventListener('click', window.unlockAudioAndStart);
+        window.addEventListener('touchstart', window.unlockAudioAndStart);
+
+        window.addEventListener('pointermove', (e) => { pointerX = e.clientX; pointerY = e.clientY; });
+        window.addEventListener('resize', initLayout); initLayout(); animate();
+    </script>
+</body>
+</html>
