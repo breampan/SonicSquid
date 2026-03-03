@@ -64,14 +64,19 @@
         
         #replay-ui { position: absolute; z-index: 200; display: none; pointer-events: auto; transform: translate(-50%, 0); }
         
+        /* 修正 1：加上半透明毛玻璃背板並移到畫面上方，徹底解決文字與物件打架的問題 */
         #challenge-hint {
-            position: absolute; top: 38%; left: 50%;
-            transform: translate(-50%, -50%); color: #64dcff;
-            font-size: 22px; pointer-events: none; opacity: 0;
-            transition: opacity 0.5s; text-align: center; z-index: 50;
-            text-shadow: 0 0 20px rgba(100, 220, 255, 0.8);
-            line-height: 1.6; width: 85%;
+            position: absolute; top: 12%; left: 50%;
+            transform: translateX(-50%); color: #fff;
+            font-size: 20px; pointer-events: none; opacity: 0;
+            transition: opacity 0.5s; text-align: center; z-index: 300;
+            line-height: 1.6; width: max-content; min-width: 300px;
+            background: rgba(5, 15, 25, 0.7); backdrop-filter: blur(15px);
+            padding: 15px 35px; border-radius: 20px; border: 1px solid rgba(100, 220, 255, 0.2);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
         }
+        .feedback-score { font-size: 32px; font-weight: bold; color: #64dcff; margin-bottom: 5px; }
+
         #report-overlay {
             display: none; position: absolute; top: 50%; left: 50%; 
             transform: translate(-50%, -50%); background: rgba(5, 15, 25, 0.9); 
@@ -126,6 +131,7 @@
         
         let width, height, dpr, centerX, centerY;
         let listenerPlaneY, uiScale, iconSize;
+        let displayRadiusX, displayRadiusY;
 
         let audioCtx;
         let convolver, masterCompressor;
@@ -179,15 +185,15 @@
             return curve;
         }
 
-        // 精確的座標映射（將距離與角度轉換為全螢幕座標）
+        // 修正 2：統一全域座標映射邏輯，保證雷達線與物件絕對對齊
         function getTutorialCoords(angleDeg, dist) {
             const rad = angleDeg * Math.PI / 180;
-            // 0度為正前方 (畫面向上，Z為負)
+            // 音訊空間中：0度正前(Z負)，90度正右(X正)
             const px = Math.sin(rad) * dist;
             const pz = -Math.cos(rad) * dist;
             return {
-                x: centerX + (px / 3.0) * (width * 0.4),
-                y: listenerPlaneY + (pz / 3.0) * (height * 0.4) // 以 listenerPlaneY 為基準
+                x: centerX + (px / 3.0) * displayRadiusX,
+                y: listenerPlaneY + (pz / 3.0) * displayRadiusY
             };
         }
 
@@ -304,17 +310,32 @@
                 ctx.globalAlpha = p.a; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
             });
             
-            // 修正背景網格：全部對齊 listenerPlaneY 確保聲畫合一
+            // 修正 3：背景網格透視重構，取消擾動扭曲，確保與物件路徑完美對齊
             ctx.globalAlpha = 1.0;
             ctx.lineWidth = 1; ctx.strokeStyle = cfg.main + '22';
-            for (let i = 0; i < 24; i++) {
-                const a = (i / 24) * Math.PI * 2 + Math.sin(t * 0.1) * 0.05;
-                ctx.beginPath(); ctx.moveTo(centerX, listenerPlaneY); ctx.lineTo(centerX + Math.cos(a) * width, listenerPlaneY + Math.sin(a) * height); ctx.stroke();
+            
+            // 畫 12 條標準放射線 (每 30 度)
+            for (let i = 0; i < 12; i++) {
+                const a = (i / 12) * Math.PI * 2;
+                ctx.beginPath(); 
+                ctx.moveTo(centerX, listenerPlaneY); 
+                // 使用與物件相同的透視比例 (displayRadiusX / displayRadiusY)
+                ctx.lineTo(centerX + Math.sin(a) * displayRadiusX * 1.5, listenerPlaneY - Math.cos(a) * displayRadiusY * 1.5); 
+                ctx.stroke();
             }
-            for (let r = 1; r < 7; r++) {
-                const ringT = t * 0.5 + r; const offset = Math.sin(ringT) * 12;
-                ctx.beginPath(); ctx.ellipse(centerX, listenerPlaneY, Math.max(1, r * 115 + offset), Math.max(1, r * 75 + offset), 0, 0, Math.PI * 2); ctx.stroke();
+            
+            // 畫 4 圈距離網格 (代表 0.75m, 1.5m, 2.25m, 3.0m)
+            for (let r = 1; r <= 4; r++) {
+                const ringT = t * 0.5 + r; const offset = Math.sin(ringT) * 4; // 保留微弱波紋感，但不影響中心對齊
+                ctx.beginPath(); 
+                ctx.ellipse(centerX, listenerPlaneY, 
+                            displayRadiusX * (r/4) + offset, 
+                            displayRadiusY * (r/4) + offset, 
+                            0, 0, Math.PI * 2); 
+                ctx.stroke();
             }
+            
+            // 中心點裝飾
             ctx.save(); ctx.shadowBlur = 20; ctx.shadowColor = cfg.main + '55'; ctx.fillStyle = cfg.main + '15'; ctx.strokeStyle = cfg.main + '77';
             ctx.beginPath(); ctx.ellipse(centerX, listenerPlaneY + 10, 32, 13, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
             ctx.beginPath(); ctx.arc(centerX, listenerPlaneY - 12, 13, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); ctx.restore();
@@ -322,9 +343,11 @@
 
         function drawGeometry(ctx, type, x, y, baseSize, rgbStr, alpha = 1.0, pulse = 0, extraScale = 1.0) {
             const isBehind = y > listenerPlaneY; 
-            // 修正視覺深度映射基準為 listenerPlaneY
-            const distToCenter = Math.sqrt((x - centerX)**2 + (y - listenerPlaneY)**2);
-            const depthFactor = Math.max(0.3, 1.2 - (distToCenter / (height * 0.5 || 1)));
+            // 修正視覺深度映射公式，確保前後方視覺縮放與距離成正比
+            const normX = (x - centerX) / displayRadiusX;
+            const normY = (y - listenerPlaneY) / displayRadiusY;
+            const distToCenter = Math.sqrt(normX*normX + normY*normY); 
+            const depthFactor = Math.max(0.35, 1.2 - (distToCenter * 0.25)); 
             
             let currentSize = baseSize * depthFactor * extraScale; 
             if (type === 'bell' || type === 'rotor') currentSize *= 1.15; 
@@ -383,7 +406,7 @@
                 this.type = typeConfig.id; this.rgb = typeConfig.color; this.x = x; this.y = y;
                 this.normFactor = typeConfig.norm || 1.0; 
                 this.smoothedX = x; this.smoothedY = y;
-                this.targetX = x; this.targetY = y; // 給滑行教學用的座標
+                this.targetX = x; this.targetY = y; 
                 this.isChallengeObject = false; 
                 this.isTutorialObject = false;
                 this.isMuted = false;
@@ -418,11 +441,10 @@
                 this.gain.gain.value = 0.0001;
 
                 if (this.type === 'bell') {
-                    // 極度強化高頻泛音，讓 HRTF 有東西可以切
                     const freqs = [600, 1200, 2400, 4800];
                     freqs.forEach((freq, i) => {
                         let osc = audioCtx.createOscillator(); let oscGain = audioCtx.createGain();
-                        osc.type = i === 3 ? 'sawtooth' : 'sine'; // 最高頻用鋸齒波增加摩擦感
+                        osc.type = i === 3 ? 'sawtooth' : 'sine'; 
                         osc.frequency.value = freq;
                         this.nodes.push({type: 'env', gain: oscGain, i: i, lastTrigger: 0});
                         osc.connect(oscGain); oscGain.connect(this.conchaBoost);
@@ -482,8 +504,9 @@
                 if (!this.panner || !audioCtx || this.isMuted) return; 
                 const now = audioCtx.currentTime;
                 
-                const posX = (this.smoothedX - centerX) / (width * 0.4) * 3.0;
-                const posZ = (this.smoothedY - listenerPlaneY) / (height * 0.4) * 3.0;
+                // 修正：動態版的 Audio Mapping 也必須跟隨 displayRadius 換算
+                const posX = (this.smoothedX - centerX) / displayRadiusX * 3.0;
+                const posZ = (this.smoothedY - listenerPlaneY) / displayRadiusY * 3.0;
                 
                 const tc = 0.22; 
                 this.panner.positionX.setTargetAtTime(posX, now, tc);
@@ -492,7 +515,6 @@
                 const distance = Math.max(0.1, Math.sqrt(posX*posX + posZ*posZ));
                 const frontToBackRatio = -posZ / (distance || 1); 
                 
-                // 更極端的實體遮蔽濾波
                 this.conchaBoost.gain.setTargetAtTime(frontToBackRatio > 0 ? frontToBackRatio * 8.0 : 0, now, tc);
                 this.pinnaNotch.gain.setTargetAtTime(frontToBackRatio < 0 ? frontToBackRatio * 24.0 : 0, now, tc); 
                 
@@ -542,7 +564,6 @@
                 this.pulse += 0.08;
                 
                 if (this.isTutorialObject) {
-                    // 教學模式平滑滑行到新座標
                     this.smoothedX += (this.targetX - this.smoothedX) * 0.05;
                     this.smoothedY += (this.targetY - this.smoothedY) * 0.05;
                     this.x = this.smoothedX; this.y = this.smoothedY;
@@ -642,7 +663,6 @@
                                     challengeTarget.targetY = pt.y;
                                     challengeTarget.play();
                                 } else {
-                                    // 平滑滑行到新位置
                                     challengeTarget.targetX = pt.x;
                                     challengeTarget.targetY = pt.y;
                                 }
@@ -769,8 +789,12 @@
 
             centerX = width / 2; centerY = height / 2; listenerPlaneY = height * 0.55; 
             uiScale = Math.min(1.0, width / 1000) + 0.5; iconSize = Math.max(22, Math.min(36, width * 0.075));
-            const paletteX = width - iconSize * 1.6;
             
+            // 精確定義顯示雷達的半徑範圍
+            displayRadiusX = Math.min(width * 0.45, height * 0.45); 
+            displayRadiusY = displayRadiusX * 0.65; // 模擬 3D 透視扁平率
+            
+            const paletteX = width - iconSize * 1.6;
             paletteIcons = [
                 { typeConfig: WAVE_TYPES.BELL, x: paletteX, y: height * 0.15 }, 
                 { typeConfig: WAVE_TYPES.ROTOR, x: paletteX, y: height * 0.28 }, 
@@ -825,7 +849,7 @@
                     if (challengeState === 'preparing' && Math.sqrt((pointerX - screenCenterHitArea.x)**2 + (pointerY - screenCenterHitArea.y)**2) < screenCenterHitArea.r) { newTarget = { type: 'canvas', action: 'start_play' }; }
                     if (challengeState === 'feedback' && Math.sqrt((pointerX - screenCenterHitArea.x)**2 + (pointerY - screenCenterHitArea.y)**2) < screenCenterHitArea.r) { newTarget = { type: 'canvas', action: 'next_round' }; }
                     if (challengeState === 'waiting_for_guess') {
-                        if (pointerY < height - 80 && pointerX > 20) {
+                        if (pointerY > 50 && pointerX > 20) {
                             newTarget = { type: 'canvas', action: 'guess_target' };
                         }
                     }
