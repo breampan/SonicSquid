@@ -62,6 +62,8 @@
         }
         .action-btn.active { background: #64dcff; color: #01050a; }
         .action-btn.hovering { filter: brightness(1.5) drop-shadow(0 0 10px #64dcff); }
+        .btn-highlight { border-color: #ffaa44; color: #ffaa44; background: rgba(255, 170, 68, 0.15); box-shadow: 0 0 15px rgba(255, 170, 68, 0.15); }
+        .btn-highlight.hovering { filter: brightness(1.3) drop-shadow(0 0 10px #ffaa44); }
         
         .score-panel { color: #64dcff; font-size: 18px; font-weight: bold; display: none; text-shadow: 0 0 10px rgba(100,220,255,0.5); }
         .round-panel { color: #fff; font-size: 14px; display: none; opacity: 0.8; }
@@ -93,7 +95,8 @@
 
     <div id="challenge-ui">
         <div id="mode-selection" class="mode-selector">
-            <button class="action-btn" id="btn-4" data-action="mode-4">4 方位設定</button>
+            <button class="action-btn btn-highlight" data-action="tutorial">🎧 新手方位教學</button>
+            <button class="action-btn" id="btn-4" data-action="mode-4" style="margin-top: 5px;">4 方位設定</button>
             <button class="action-btn" id="btn-8" data-action="mode-8">8 方位設定</button>
             <button class="action-btn active" id="btn-12" data-action="mode-12">12 方位設定</button>
             <button class="action-btn" style="margin-top: 10px; border-color: #fff; color: #fff;" data-action="start">開始五題定向挑戰</button>
@@ -156,7 +159,7 @@
         const MAX_ROUNDS = 5;
         const CONSTANT_DURATION = 2.0;
 
-        let targetAngleDeg = 0;
+        let targetAngleDeg = null; 
         let targetDistance = 1.0;
         let targetType = null;
 
@@ -237,7 +240,6 @@
                 try {
                     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
                     masterCompressor = audioCtx.createDynamicsCompressor();
-                    // 修正 1：放寬 Compressor 限制，避免音量 Pumping 忽大忽小
                     masterCompressor.threshold.setTargetAtTime(-12, audioCtx.currentTime, 0.1); 
                     masterCompressor.ratio.setTargetAtTime(3, audioCtx.currentTime, 0.1);
                     masterCompressor.connect(audioCtx.destination);
@@ -323,11 +325,15 @@
                     catch (e) { this.panner.setPosition(px, 0, pz); }
                 } else { this.panner.setPosition(px, 0, pz); }
 
-                air.frequency.value = Math.max(400, 20000 - (distance * 3500));
+                // 強化耳廓遮蔽效應，讓前後聽感差異更大
+                const frontToBackRatio = -pz / (distance * 2.5 || 1); // 1.0 = 正前, -1.0 = 正後
+                pinna.gain.value = frontToBackRatio > 0 ? frontToBackRatio * 6.0 : frontToBackRatio * 15.0; 
                 
-                // 修正 2：將斷崖式前後 EQ 改變，轉換為平滑過渡（解決前後音量落差太大的問題）
-                const frontToBackRatio = -pz / (distance * 2.5 || 1); // 範圍從 1.0(正前) 到 -1.0(正後)
-                pinna.gain.value = frontToBackRatio * 4.0; // 從前到後平滑漸變 +4dB 到 -4dB
+                let baseFreq = 20000 - (distance * 2000);
+                if (frontToBackRatio < 0) {
+                    baseFreq = baseFreq - Math.abs(frontToBackRatio) * 12000; 
+                }
+                air.frequency.value = Math.max(400, baseFreq);
                 
                 const attackTime = 0.05; const releaseTime = 0.15;  
                 const end = now + duration; let targetVol = 0.4 * (typeConfig.norm || 1.0); 
@@ -342,7 +348,6 @@
                     this.source.type = typeConfig.id; this.modulator.type = 'sine'; this.modulator.connect(this.modGain); this.modGain.connect(this.source.frequency);
                     this.source.connect(pinna); 
                     
-                    // 修正 3：固定顫音（Vibrato）頻率，不再跟方位（左右距離 px）掛勾
                     this.modulator.frequency.value = 5.0; 
                     
                     this.modGain.gain.value = Math.max(0, (1 - distance/4) * (typeConfig.id === 'sine' ? 120 : 250));
@@ -433,6 +438,44 @@
                         document.querySelectorAll('.mode-selector .action-btn').forEach(b => b.classList.remove('active'));
                         document.getElementById(`btn-${steps}`).classList.add('active');
                     }
+                } else if (actionStr === 'tutorial') {
+                    if (isChallengeMode) return;
+                    if (audioPlayer) audioPlayer.stop();
+                    isChallengeMode = true; 
+                    challengeState = 'tutorial';
+                    
+                    document.getElementById('mode-selection').style.display = "none";
+                    document.getElementById('radius-controls').style.display = "none";
+                    document.getElementById('center-hint').style.opacity = 1;
+
+                    const runTutorialStep = (text, angle, delay) => {
+                        return new Promise(resolve => {
+                            document.getElementById('center-hint').innerHTML = text;
+                            if (angle !== null) {
+                                if (!audioPlayer) audioPlayer = new DirectionalPlayer();
+                                audioPlayer.play(activeSoundType, angle, currentRadius, 2.5);
+                                targetAngleDeg = angle; 
+                            }
+                            setTimeout(resolve, delay);
+                        });
+                    };
+
+                    (async () => {
+                        await runTutorialStep("歡迎來到聽能訓練！<br><span style='font-size:16px'>這裡的操作全靠『游標懸停』，無需點擊滑鼠</span>", null, 3000);
+                        await runTutorialStep("現在測試：正前方 (0°)<br><span style='font-size:16px; color:#44ffaa'>聲音較為明亮、清晰</span>", 0, 3000);
+                        await runTutorialStep("現在測試：正後方 (180°)<br><span style='font-size:16px; color:#ff4444'>聲音較為沉悶，感覺被腦袋擋住了</span>", 180, 3000);
+                        await runTutorialStep("現在測試：正右方 (90°)<br><span style='font-size:16px; color:#10dcff'>聲音明顯偏向右耳</span>", 90, 3000);
+                        await runTutorialStep("現在測試：正左方 (270°)<br><span style='font-size:16px; color:#10dcff'>聲音明顯偏向左耳</span>", 270, 3000);
+                        await runTutorialStep("教學結束！<br><span style='font-size:16px'>你可以自由切換環境與方位來進行練習了</span>", null, 3000);
+
+                        isChallengeMode = false;
+                        challengeState = 'idle';
+                        targetAngleDeg = null;
+                        document.getElementById('mode-selection').style.display = "flex";
+                        document.getElementById('radius-controls').style.display = "flex";
+                        document.getElementById('center-hint').style.opacity = 0;
+                    })();
+                    
                 } else if (actionStr === 'start') {
                     if (challengeState === 'preparing') return; 
                     if (audioPlayer) audioPlayer.stop();
@@ -474,8 +517,22 @@
                 } else if (actionStr === 'replay_sound') {
                     if (!audioPlayer) audioPlayer = new DirectionalPlayer();
                     audioPlayer.play(targetType, targetAngleDeg, targetDistance, CONSTANT_DURATION);
+                    
+                    // 若在回饋階段重新聆聽
                     if (challengeState === 'feedback') {
-                        challengeState = 'replaying'; setTimeout(() => { if(challengeState === 'replaying') challengeState = 'feedback'; }, CONSTANT_DURATION * 1000 + 100);
+                        challengeState = 'replaying'; 
+                        setTimeout(() => { if(challengeState === 'replaying') challengeState = 'feedback'; }, CONSTANT_DURATION * 1000 + 100);
+                    } 
+                    // 若在作答階段重新聆聽，畫面會回到 listening 狀態暫時變暗
+                    else if (challengeState === 'guessing') {
+                        challengeState = 'listening';
+                        document.getElementById('center-hint').innerHTML = "請閉上眼，專注聆聽..."; 
+                        setTimeout(() => { 
+                            if (challengeState === 'listening') {
+                                challengeState = 'guessing'; 
+                                document.getElementById('center-hint').innerHTML = "聲音來自哪個方位？<br><span style='font-size:16px; color:#fff'>請懸停在對應的圖示上</span>"; 
+                            }
+                        }, CONSTANT_DURATION * 1000 + 100);
                     }
                 } else if (actionStr.startsWith('guess-')) {
                     const angleIndex = parseInt(actionStr.split('-')[1]);
@@ -596,7 +653,8 @@
             }
 
             if (!newTarget) {
-                if (isChallengeMode && (challengeState === 'feedback' || challengeState === 'replaying')) {
+                // 修改：讓「再聽一次」按鈕在 guessing、feedback、replaying 階段都能觸發
+                if (isChallengeMode && (challengeState === 'guessing' || challengeState === 'feedback' || challengeState === 'replaying')) {
                     if (Math.sqrt((pointerX - replayBtnHitArea.x)**2 + (pointerY - replayBtnHitArea.y)**2) < replayBtnHitArea.r) { newTarget = { type: 'canvas', action: 'replay_sound' }; }
                 }
                 if (!newTarget && isChallengeMode) {
@@ -633,51 +691,8 @@
             checkHoverTargets();
 
             let targetActiveDist = 1.0;
-            if (isChallengeMode) { if (challengeState === 'idle' || challengeState === 'preparing') targetActiveDist = 3.0; else targetActiveDist = targetDistance; }
-            else { targetActiveDist = currentRadius; }
-            currentVisualFactor += (getRadiusFactor(targetActiveDist) - currentVisualFactor) * 0.12; 
-            
-            drawBackground();
-            const now = Date.now(); const pulse = now * 0.002;
-            paletteIcons.forEach(p => { const isActive = (!isChallengeMode && p.typeConfig.id === activeSoundType.id); drawGeometry(ctx, p.typeConfig.id, p.x, p.y, iconSize, p.typeConfig.color, isActive ? 1.0 : 0.4, pulse, isActive ? 1.2 : 1.0); if (isActive) { ctx.strokeStyle = `rgba(${p.typeConfig.color}, 0.8)`; ctx.beginPath(); ctx.arc(p.x, p.y, iconSize * 2, 0, Math.PI*2); ctx.stroke(); } });
-            
-            const renderType = isChallengeMode ? targetType : activeSoundType;
-            let displaySteps = activeSteps;
-            if (!isChallengeMode && hoverTarget && hoverTarget.action && hoverTarget.action.startsWith('mode-')) {
-                displaySteps = parseInt(hoverTarget.action.split('-')[1]);
-            }
-
-            if (renderType) {
-                const stepAngle = 360 / displaySteps;
-                for (let i = 0; i < displaySteps; i++) {
-                    const angle = i * stepAngle; const rad = angle * Math.PI / 180;
-                    const nodeX = centerX + Math.sin(rad) * displayRadiusX * currentVisualFactor;
-                    const nodeY = centerY - Math.cos(rad) * displayRadiusY * currentVisualFactor;
-                    let alpha = 0.2; let scale = 0.8;
-                    
-                    const expectedAction = isChallengeMode ? `guess-${i}` : `playnode-${i}`;
-                    const isNodeHovered = (hoverTarget && hoverTarget.action === expectedAction);
-                    
-                    if (isChallengeMode) {
-                        if (challengeState === 'listening') alpha = 0.05;
-                        else if (challengeState === 'guessing') { alpha = 0.35; if (isNodeHovered) { alpha = 0.9; scale = 1.15 + 0.1 * Math.sin(now / 150); } }
-                        else if (challengeState === 'feedback' || challengeState === 'replaying') { if (Math.abs(angle - targetAngleDeg) < 0.1) { alpha = 1.0; scale = 1.3; ctx.beginPath(); const beam = ctx.createLinearGradient(centerX, centerY, nodeX, nodeY); beam.addColorStop(0, 'rgba(100, 220, 255, 0.1)'); beam.addColorStop(1, `rgba(${renderType.color}, 0.9)`); ctx.strokeStyle = beam; ctx.lineWidth = 3; ctx.moveTo(centerX, centerY); ctx.lineTo(nodeX, nodeY); ctx.stroke(); } else if (i === guessIndex) { alpha = 0.8; ctx.fillStyle = "#ff4444"; ctx.shadowBlur = 15; ctx.shadowColor = "#ff0000"; ctx.beginPath(); ctx.arc(nodeX, nodeY, 8, 0, Math.PI*2); ctx.fill(); ctx.shadowBlur = 0; } else alpha = 0.15; }
-                    } else { if (isNodeHovered) { alpha = 0.9; scale = 1.15 + 0.1 * Math.sin(now / 150); } else alpha = 0.4; }
-                    drawGeometry(ctx, renderType.id, nodeX, nodeY, iconSize, renderType.color, alpha, pulse, scale);
-                }
-            }
-            if (isChallengeMode && (challengeState === 'feedback' || challengeState === 'replaying')) { drawReplayButton(centerX, centerY + 105 * uiScale, renderType.color, hoverTarget && hoverTarget.action === 'replay_sound'); }
-            
-            drawHoverCursor();
-            requestAnimationFrame(animate);
-        }
-
-        window.addEventListener('pointerdown', window.unlockAudioAndStart);
-        window.addEventListener('click', window.unlockAudioAndStart);
-        window.addEventListener('touchstart', window.unlockAudioAndStart);
-
-        window.addEventListener('pointermove', (e) => { pointerX = e.clientX; pointerY = e.clientY; });
-        window.addEventListener('resize', initLayout); initLayout(); animate();
-    </script>
-</body>
-</html>
+            if (isChallengeMode) { 
+                if (challengeState === 'idle' || challengeState === 'preparing' || challengeState === 'tutorial') targetActiveDist = 3.0; 
+                else targetActiveDist = targetDistance; 
+            } else { targetActiveDist = currentRadius; }
+            currentVisualFactor += (getRadiusFactor(targetActiveDist) - currentVisualFactor) * 0.12;
