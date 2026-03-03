@@ -134,7 +134,6 @@
         let noiseBuffer = null;
         let isSystemUnlocked = false; 
 
-        // 懸停系統變數
         let pointerX = window.innerWidth / 2;
         let pointerY = window.innerHeight / 2;
         let hoverTarget = null;         
@@ -177,6 +176,19 @@
                 n_samples = 44100, curve = new Float32Array(n_samples), deg = Math.PI / 180, i = 0, x;
             for ( ; i < n_samples; ++i ) { x = i * 2 / n_samples - 1; curve[i] = ( 3 + k ) * x * 20 * deg / ( Math.PI + k * Math.abs(x) ); }
             return curve;
+        }
+
+        // ==========================================
+        // 補回遺失的座標映射函數
+        // ==========================================
+        function getTutorialCoords(angleDeg, dist) {
+            const rad = angleDeg * Math.PI / 180;
+            const px = Math.sin(rad) * dist;
+            const pz = -Math.cos(rad) * dist;
+            return {
+                x: centerX + (px / 3.0) * (width * 0.4),
+                y: listenerPlaneY + (pz / 3.0) * (height * 0.4)
+            };
         }
 
         window.unlockAudioAndStart = () => {
@@ -376,7 +388,7 @@
                 this.nodes = [];
                 this.gain = null; this.panner = null; this.dryGain = null; this.wetGain = null;
                 
-                this.age = 0; // 用來控制沙盒模式的自動消散
+                this.age = 0; 
                 this.fadeSpeed = 0.02;
             }
             play() {
@@ -523,18 +535,18 @@
                 this.pulse += 0.08;
                 
                 if (this.isTutorialObject) {
-                    this.smoothedX = this.x; this.smoothedY = this.y;
+                    this.smoothedX += (this.x - this.smoothedX) * 0.5;
+                    this.smoothedY += (this.y - this.smoothedY) * 0.5;
                     this.updatePanner();
                 }
                 else if (!this.isChallengeObject) { 
-                    // 沙盒模式：游標跟隨，但會自動老化消散
                     if (!this.isFading) {
                         this.age += 16.6; 
                         this.x = pointerX; this.y = pointerY;
                         this.smoothedX += (this.x - this.smoothedX) * 0.22;
                         this.smoothedY += (this.y - this.smoothedY) * 0.22; 
                         this.updatePanner(); 
-                        if (this.age > 8000) { // 8秒後自動消散
+                        if (this.age > 8000) { 
                             this.startFadeOut(true);
                         }
                     }
@@ -576,22 +588,11 @@
             ui.style.top = (challengeTarget.y > centerY) ? Math.min(height - 80, challengeTarget.y + offset) + "px" : Math.max(80, challengeTarget.y - offset - 40) + "px";
         }
 
-        // 將角度與距離映射為動態版的實際螢幕座標
-        const getTutorialCoords = (angleDeg, dist) => {
-            const rad = angleDeg * Math.PI / 180;
-            const px = Math.sin(rad) * dist;
-            const pz = -Math.cos(rad) * dist;
-            return {
-                x: centerX + (px / 3.0) * (width * 0.4),
-                y: listenerPlaneY + (pz / 3.0) * (height * 0.4)
-            };
-        };
-
         function executeAction(actionStr) {
             try {
                 initAudio(); 
                 if (actionStr === 'toggle_mode') {
-                    stopAllSounds(); document.getElementById('report-overlay').style.display = "none";
+                    stopAllSounds(true); document.getElementById('report-overlay').style.display = "none";
                     isChallengeMode = !isChallengeMode;
                     const btn = document.getElementById('mode-toggle'); const scoreDisplay = document.getElementById('score-display');
                     const hint = document.getElementById('challenge-hint'); document.getElementById('replay-ui').style.display = "none";
@@ -613,7 +614,7 @@
                     isChallengeMode = true; 
                     challengeState = 'tutorial';
                     
-                    document.getElementById('mode-selection').style.display = "none";
+                    document.getElementById('mode-toggle').style.display = "none";
                     document.getElementById('scene-controls').style.display = "none";
                     document.getElementById('challenge-hint').style.opacity = 1;
 
@@ -657,7 +658,7 @@
                         challengeState = 'idle';
                         window.setScene(originalScene);
                         
-                        document.getElementById('mode-selection').style.display = "flex";
+                        document.getElementById('mode-toggle').style.display = "block";
                         document.getElementById('scene-controls').style.display = "flex";
                         document.getElementById('challenge-hint').style.opacity = 0;
                     })();
@@ -683,7 +684,7 @@
                     const pId = actionStr.split('-')[1];
                     const typeInfo = Object.values(WAVE_TYPES).find(t => t.id === pId);
                     if (typeInfo) {
-                        stopAllSounds(true); // 清除舊聲音
+                        stopAllSounds(true); 
                         activeSoundType = typeInfo;
                         const n = new DraggableSound(activeSoundType, pointerX, pointerY); 
                         activeObjects.push(n); n.play();
@@ -693,7 +694,7 @@
         }
 
         function startNewChallenge() {
-            stopAllSounds(); challengeState = 'listening'; document.getElementById('replay-ui').style.display = "none";
+            stopAllSounds(true); challengeState = 'listening'; document.getElementById('replay-ui').style.display = "none";
             const hint = document.getElementById('challenge-hint'); hint.innerHTML = `第 ${questionsDone + 1} 題：聆聽聲音移動...`; hint.style.opacity = 1;
             const randomType = Object.values(WAVE_TYPES)[Math.floor(Math.random() * 4)];
             const rx = width*0.25 + Math.random()*width*0.5; const ry = height*0.25 + Math.random()*height*0.5;
@@ -726,7 +727,7 @@
             totalScore += qScore; sessionScores.push(qScore); questionsDone++; updateScoreUI();
             
             document.getElementById('replay-ui').style.display = "block"; positionReplayButton(); 
-            document.getElementById('challenge-hint').innerHTML = `方位已揭曉 (本題得分: ${qScore})<br><span style='font-size:16px; color:#fff'>懸停畫面中央繼續${questionsDone < 5 ? "下一題" : "看評估報告"}</span>`;
+            document.getElementById('challenge-hint').innerHTML = `軌跡已揭曉 (本題得分: ${qScore})<br><span style='font-size:16px; color:#fff'>懸停畫面中央繼續${questionsDone < 5 ? "下一題" : "看評估報告"}</span>`;
             screenCenterHitArea = { x: centerX, y: height * 0.45, r: 80 * uiScale };
             challengeTarget.life = 1.0;
         }
@@ -734,7 +735,7 @@
         function updateScoreUI() { document.getElementById('score-display').innerText = `題數: ${questionsDone}/5 | 總積分: ${totalScore}`; }
 
         function showFinalReport() {
-            challengeState = 'idle'; stopAllSounds();
+            challengeState = 'idle'; stopAllSounds(true);
             const overlay = document.getElementById('report-overlay'); const content = document.getElementById('report-content');
             content.innerHTML = `
                 <div style="font-size:32px; font-weight:bold; margin-bottom:10px;">${totalScore} <span style="font-size:16px">/ 100</span></div>
@@ -810,7 +811,6 @@
                     if (challengeState === 'preparing' && Math.sqrt((pointerX - screenCenterHitArea.x)**2 + (pointerY - screenCenterHitArea.y)**2) < screenCenterHitArea.r) { newTarget = { type: 'canvas', action: 'start_play' }; }
                     if (challengeState === 'feedback' && Math.sqrt((pointerX - screenCenterHitArea.x)**2 + (pointerY - screenCenterHitArea.y)**2) < screenCenterHitArea.r) { newTarget = { type: 'canvas', action: 'next_round' }; }
                     if (challengeState === 'waiting_for_guess') {
-                        // 在猜題階段，只要游標靜止在畫面上任何地方，就開始計時作為答案
                         if (pointerY < height - 80 && pointerX > 20) {
                             newTarget = { type: 'canvas', action: 'guess_target' };
                         }
@@ -824,7 +824,6 @@
                 }
             }
 
-            // 防抖動機制：在作答或拖曳時，確保游標沒有大範圍移動才繼續計時
             if (newTarget) {
                 if (!hoverTarget || hoverTarget.action !== newTarget.action) { 
                     hoverTarget = newTarget; hoverStartTime = Date.now(); hasTriggered = false; 
