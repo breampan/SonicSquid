@@ -96,7 +96,7 @@
             backdrop-filter: blur(30px); padding: 40px; border-radius: 24px; 
             border: 1px solid rgba(100, 220, 255, 0.4); z-index: 500; 
             color: #fff; width: 85%; max-width: 800px; max-height: 85vh; 
-            overflow-y: auto; pointer-events: auto; /* 允許手指滑動，若使用者有觸控螢幕 */
+            overflow-y: auto; pointer-events: auto; 
             box-shadow: 0 0 50px rgba(0,0,0,0.8);
         }
         .theory-title { color: #bb66ff; font-size: 28px; margin-bottom: 20px; border-bottom: 1px solid rgba(187,102,255,0.3); padding-bottom: 10px; text-align: center; letter-spacing: 2px;}
@@ -121,8 +121,7 @@
         </div>
         <button class="action-btn btn-highlight" data-action="start_tutorial">🎧 1. 系統環境與方位教學</button>
         <button class="action-btn" style="border-color: #44ffaa; color: #44ffaa;" data-action="start_free_training">🎯 2. 無盡尋標訓練 (推薦)</button>
-        <button class="action-btn" data-action="start_challenge">🏆 3. 五題定向測驗挑戰</button>
-        <button class="action-btn btn-info" style="margin-top: 10px;" data-action="show_theory">📖 4. 系統學理與設計概念</button>
+        <button class="action-btn btn-info" style="margin-top: 10px;" data-action="show_theory">📖 3. 系統學理與設計概念</button>
     </div>
 
     <div id="theory-overlay">
@@ -184,7 +183,7 @@
         let noiseBuffer = null;
         let isSystemUnlocked = false; 
 
-        // 系統狀態： 'menu', 'theory', 'tutorial', 'training', 'challenge'
+        // 系統狀態
         let appMode = 'menu'; 
         
         let pointerX = window.innerWidth / 2;
@@ -192,6 +191,9 @@
         let hoverTarget = null;         
         let hoverStartTime = 0;         
         let hasTriggered = false;       
+        
+        // 全域防呆冷卻系統 (Global Hover Cooldown)
+        let globalHoverCooldown = 0;
 
         let currentHapticIntensity = 0; 
         let isTargetLocked = false;
@@ -215,7 +217,15 @@
         };
 
         const DISTANCES = [0.5, 1.0, 2.0, 3.0];
+        const SCENE_KEYS = ['bathroom', 'station', 'cave', 'forest'];
         let waterBubbles = [];
+
+        // 觸發防呆冷卻
+        function setHoverCooldown(ms) {
+            globalHoverCooldown = Date.now() + ms;
+            hoverTarget = null;
+            hasTriggered = false;
+        }
 
         function makeDistortionCurve(amount) {
             let k = typeof amount === 'number' ? amount : 50,
@@ -239,6 +249,7 @@
             isSystemUnlocked = true;
             document.getElementById('unlock-overlay').style.display = 'none';
             initAudio();
+            setHoverCooldown(2000); // 確保解鎖後有 2 秒的 UI 防呆保護
         };
 
         function initAudio() {
@@ -296,14 +307,6 @@
         function setScene(sceneId) {
             currentScene = sceneId;
             applySceneAudio(sceneId);
-        }
-
-        function stopAllSounds() {
-            const now = audioCtx ? audioCtx.currentTime : 0;
-            if (targetSoundObject) {
-                targetSoundObject.fadeOutAndStop();
-                targetSoundObject = null;
-            }
         }
 
         function initBackgroundVisuals() {
@@ -370,14 +373,14 @@
             ctx.beginPath(); ctx.arc(centerX, listenerPlaneY - 12, 13, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); ctx.restore();
         }
 
-        function drawGeometry(ctx, type, x, y, baseSize, rgbStr, alpha = 1.0, pulse = 0) {
+        function drawGeometry(ctx, type, x, y, baseSize, rgbStr, alpha = 1.0, pulse = 0, extraScale = 1.0) {
+            const isBehind = y > listenerPlaneY; 
             const normX = (x - centerX) / displayRadiusX;
             const normY = (y - listenerPlaneY) / displayRadiusY;
-            const isBehind = y > listenerPlaneY; 
             const distToCenter = Math.sqrt(normX*normX + normY*normY); 
-            const depthFactor = Math.max(0.4, 2.0 - (distToCenter * 1.5)); 
+            const depthFactor = Math.max(0.35, 1.2 - (distToCenter * 0.25)); 
             
-            let currentSize = baseSize * depthFactor; 
+            let currentSize = baseSize * depthFactor * extraScale; 
             if (type === 'bell' || type === 'rotor') currentSize *= 1.15; 
             
             ctx.save(); ctx.translate(x, y); 
@@ -561,11 +564,13 @@
                 if (!this.gain || !audioCtx) return;
                 const now = audioCtx.currentTime;
                 this.gain.gain.cancelScheduledValues(now);
-                this.gain.gain.linearRampToValueAtTime(0.0001, now + 1.0);
+                // 修正 2：補上安全的 setValueAtTime 錨點，防止 InvalidStateError 導致無盡迴圈斷裂
+                this.gain.gain.setValueAtTime(this.gain.gain.value || 0.0001, now);
+                this.gain.gain.setTargetAtTime(0.0001, now, 0.15); // 使用安全的 setTargetAtTime
                 setTimeout(() => {
                     this.nodes.forEach(n => { try { if(n.stop) n.stop(); else if(n.node) n.node.stop(); } catch(e){} });
                     this.gain.disconnect();
-                }, 1200);
+                }, 1000);
             }
 
             draw(ctx) {
@@ -647,6 +652,7 @@
 
         function revealTarget() {
             if (!targetSoundObject) return;
+            if (targetSoundObject.isRevealed) return; // 雙重保險防呆
             targetSoundObject.isRevealed = true;
             isTargetLocked = false;
             document.getElementById('haptic-meter-container').style.display = 'none';
@@ -654,15 +660,18 @@
             const hint = document.getElementById('challenge-hint');
             hint.innerHTML = `<span style='color:#44ffaa; font-size:28px;'>🎯 尋獲目標！</span><br><span style='font-size:16px; color:#fff'>${targetSoundObject.type.name} (距離: ${targetSoundObject.dist}m)</span>`;
             
-            const osc = audioCtx.createOscillator();
-            const g = audioCtx.createGain();
-            osc.frequency.setValueAtTime(880, audioCtx.currentTime);
-            osc.frequency.exponentialRampToValueAtTime(1760, audioCtx.currentTime + 0.1);
-            g.gain.setValueAtTime(0, audioCtx.currentTime);
-            g.gain.linearRampToValueAtTime(0.5, audioCtx.currentTime + 0.05);
-            g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 1.0);
-            osc.connect(g); g.connect(audioCtx.destination);
-            osc.start(); osc.stop(audioCtx.currentTime + 1.0);
+            try {
+                const osc = audioCtx.createOscillator();
+                const g = audioCtx.createGain();
+                osc.type = 'sine';
+                osc.frequency.value = 880;
+                osc.frequency.exponentialRampToValueAtTime(1760, audioCtx.currentTime + 0.1);
+                g.gain.value = 0;
+                g.gain.setTargetAtTime(0.5, audioCtx.currentTime, 0.02);
+                g.gain.setTargetAtTime(0, audioCtx.currentTime + 0.1, 0.2);
+                osc.connect(g); g.connect(masterCompressor);
+                osc.start(); osc.stop(audioCtx.currentTime + 1.0);
+            } catch(e) {}
 
             questionsDone++;
             document.getElementById('score-display').innerText = `完成尋標數: ${questionsDone}`;
@@ -675,6 +684,8 @@
         function executeAction(actionStr) {
             try {
                 initAudio(); 
+                setHoverCooldown(1500); // 修正 1：每次執行完操作，強制給予 1.5 秒的全域防呆冷卻時間
+
                 if (actionStr === 'return_menu') {
                     if (targetSoundObject) targetSoundObject.fadeOutAndStop();
                     appMode = 'menu';
@@ -777,29 +788,42 @@
                 cursorCtx.shadowColor = "#ffaa44";
             }
             
-            cursorCtx.strokeStyle = isTargetLocked ? "#ffaa44" : "rgba(100, 220, 255, 0.8)"; 
-            cursorCtx.lineWidth = 2;
-            cursorCtx.beginPath(); cursorCtx.arc(0, 0, 8, 0, Math.PI*2); cursorCtx.stroke();
-            cursorCtx.beginPath(); cursorCtx.arc(0, 0, 2, 0, Math.PI*2); cursorCtx.fillStyle="#fff"; cursorCtx.fill();
-            cursorCtx.shadowBlur = 0;
+            // 修正 1：如果處於冷卻期，游標呈現虛線灰色，提示無法操作
+            if (Date.now() < globalHoverCooldown) {
+                hoverStartTime = Date.now(); 
+                cursorCtx.strokeStyle = "rgba(255, 255, 255, 0.3)";
+                cursorCtx.lineWidth = 2;
+                cursorCtx.setLineDash([4, 4]);
+                cursorCtx.beginPath(); cursorCtx.arc(0, 0, 16, 0, Math.PI*2); cursorCtx.stroke();
+                cursorCtx.setLineDash([]);
+            } else {
+                cursorCtx.strokeStyle = isTargetLocked ? "#ffaa44" : "rgba(100, 220, 255, 0.8)"; 
+                cursorCtx.lineWidth = 2;
+                cursorCtx.beginPath(); cursorCtx.arc(0, 0, 8, 0, Math.PI*2); cursorCtx.stroke();
+                cursorCtx.beginPath(); cursorCtx.arc(0, 0, 2, 0, Math.PI*2); cursorCtx.fillStyle="#fff"; cursorCtx.fill();
+                cursorCtx.shadowBlur = 0;
 
-            if (hoverTarget && !hasTriggered) {
-                const elapsed = Date.now() - hoverStartTime;
-                const requiredDwell = (hoverTarget.action === 'guess_target') ? 2000 : 1000;
-                const progress = Math.min(1.0, Math.max(0, elapsed / requiredDwell));
-                
-                cursorCtx.strokeStyle = hoverTarget.action === 'guess_target' ? "#ffaa44" : "#44ffaa"; 
-                cursorCtx.lineWidth = 4; cursorCtx.lineCap = "round";
-                cursorCtx.beginPath(); cursorCtx.arc(0, 0, 16, -Math.PI/2, -Math.PI/2 + (Math.PI * 2 * progress)); cursorCtx.stroke();
-                
-                if (progress >= 1.0) {
-                    hasTriggered = true; 
-                    if (hoverTarget.action === 'guess_target') revealTarget();
-                    else executeAction(hoverTarget.action);
+                if (hoverTarget && !hasTriggered) {
+                    const elapsed = Date.now() - hoverStartTime;
+                    // 一般選單 UI 1.5 秒，作答鎖定需要 2.5 秒
+                    let requiredDwell = 1500;
+                    if (hoverTarget.action === 'guess_target') requiredDwell = 2500;
                     
-                    cursorCtx.beginPath(); cursorCtx.arc(0, 0, 30, 0, Math.PI*2); 
-                    cursorCtx.fillStyle = hoverTarget.action === 'guess_target' ? "rgba(255, 170, 68, 0.4)" : "rgba(68, 255, 170, 0.4)"; 
-                    cursorCtx.fill();
+                    const progress = Math.min(1.0, Math.max(0, elapsed / requiredDwell));
+                    
+                    cursorCtx.strokeStyle = hoverTarget.action === 'guess_target' ? "#ffaa44" : "#44ffaa"; 
+                    cursorCtx.lineWidth = 4; cursorCtx.lineCap = "round";
+                    cursorCtx.beginPath(); cursorCtx.arc(0, 0, 16, -Math.PI/2, -Math.PI/2 + (Math.PI * 2 * progress)); cursorCtx.stroke();
+                    
+                    if (progress >= 1.0) {
+                        hasTriggered = true; 
+                        if (hoverTarget.action === 'guess_target') revealTarget();
+                        else executeAction(hoverTarget.action);
+                        
+                        cursorCtx.beginPath(); cursorCtx.arc(0, 0, 30, 0, Math.PI*2); 
+                        cursorCtx.fillStyle = hoverTarget.action === 'guess_target' ? "rgba(255, 170, 68, 0.4)" : "rgba(68, 255, 170, 0.4)"; 
+                        cursorCtx.fill();
+                    }
                 }
             }
             cursorCtx.restore();
@@ -812,8 +836,8 @@
             const htmlBtns = document.querySelectorAll('button:not([style*="display: none"]):not([style*="display:none"])');
             for (let btn of htmlBtns) {
                 if (btn.parentElement && window.getComputedStyle(btn.parentElement).display === 'none') continue;
-                // 若覆蓋層開啟，且按鈕不在覆蓋層內，則忽略
-                if (appMode === 'theory' && !btn.closest('#theory-overlay')) continue;
+                if (appMode === 'theory' && !btn.closest('#theory-overlay')) continue; // 彈出層隔離
+                if (appMode === 'menu' && !btn.closest('#main-menu')) continue;
                 
                 const rect = btn.getBoundingClientRect();
                 if (pointerX >= rect.left && pointerX <= rect.right && pointerY >= rect.top && pointerY <= rect.bottom) {
