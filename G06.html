@@ -69,6 +69,7 @@
             box-shadow: 0 10px 30px rgba(0,0,0,0.5);
         }
 
+        /* 觸覺震動波形顯示器 UI */
         #haptic-meter-container {
             position: absolute; right: 30px; top: 50%; transform: translateY(-50%);
             width: 70px; height: 350px; background: rgba(5, 15, 25, 0.7);
@@ -88,6 +89,7 @@
 
         .score-panel { color: #ffaa44; font-size: 20px; font-weight: bold; text-shadow: 0 0 10px rgba(255,170,68,0.5); margin-top:15px; }
 
+        /* 學理與設計概念區塊 UI */
         #theory-overlay {
             display: none; position: absolute; top: 50%; left: 50%; 
             transform: translate(-50%, -50%); background: rgba(5, 15, 25, 0.95); 
@@ -155,7 +157,7 @@
         <div class="theory-section">
             <h3>🔄 感知-動作迴圈 (Perception-Action Loop)</h3>
             <p>傳統聽能訓練多屬「被動聆聽」，但最新研究指出：「最有效的聲音增強與空間感重建，涉及感知-動作的緊密迴圈」。</p>
-            <p>本系統要求使用者主動揮動握力球（Action），藉由手部運動來帶動聲場與觸覺的回饋改變（Perception）。大腦的運動皮層與聽覺皮層在同步運作下，能極大幅度加速患者（如助聽器佩戴者）重新適應 3D 空間的 HRTF 映射關係。</p>
+            <p>本系統要求使用者主動揮動握力球（Action），藉由手部運動來帶動聲場與觸覺的回饋改變（Perception）。大腦的運動皮層與聽覺皮層在同步運作下，能極大幅度加速患者重新適應 3D 空間的 HRTF 映射關係。</p>
         </div>
         <div class="theory-section">
             <h3>👂 仿生空間聲學 (Anatomical Spatial Acoustics)</h3>
@@ -217,11 +219,8 @@
 
         let audioCtx;
         let convolver, masterCompressor;
-        let distCurve = null;
         let currentScene = 'bathroom';
         let noiseBuffer = null;
-        
-        // 修正 2：斷絕未解鎖時的隱形懸停
         let isSystemUnlocked = false; 
 
         let appMode = 'menu'; 
@@ -274,13 +273,6 @@
             hasTriggered = false;
         }
 
-        function makeDistortionCurve(amount) {
-            let k = typeof amount === 'number' ? amount : 50,
-                n_samples = 44100, curve = new Float32Array(n_samples), deg = Math.PI / 180, i = 0, x;
-            for ( ; i < n_samples; ++i ) { x = i * 2 / n_samples - 1; curve[i] = ( 3 + k ) * x * 20 * deg / ( Math.PI + k * Math.abs(x) ); }
-            return curve;
-        }
-
         function getMappedCoords(angleDeg, dist) {
             const rad = angleDeg * Math.PI / 180;
             const px = Math.sin(rad) * dist;
@@ -296,7 +288,7 @@
             isSystemUnlocked = true;
             document.getElementById('unlock-overlay').style.display = 'none';
             initAudio();
-            setHoverCooldown(2000); // 極限防呆：解鎖後強制給予 2 秒觀察時間
+            setHoverCooldown(2000); 
         };
 
         function initAudio() {
@@ -311,13 +303,10 @@
                     convolver = audioCtx.createConvolver();
                     convolver.connect(masterCompressor);
                     
-                    distCurve = makeDistortionCurve(15); 
-                    
                     const bufferSize = audioCtx.sampleRate * 2; 
                     noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
                     const output = noiseBuffer.getChannelData(0);
                     for (let i = 0; i < bufferSize; i++) output[i] = Math.random() * 2 - 1;
-                    applySceneAudio(currentScene);
                 } catch (e) { console.error("Audio Context Init Error:", e); }
             }
             if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
@@ -361,25 +350,38 @@
             });
         }
 
-        function stopAllSounds(fast = true) {
+        // 修正 1：完善的 stopAllSounds 防呆設計，確保清空所有狀態時不會崩潰
+        function stopAllSounds(fast = true, clearTargets = true) {
             const now = audioCtx ? audioCtx.currentTime : 0;
             const fadeTime = fast ? 0.2 : 1.0;
             
-            [...activeObjects, challengeTarget, tutorialTarget, trainingTarget].forEach(obj => {
+            activeObjects.forEach(obj => {
                 if (obj && obj.gain) {
                     obj.isMuted = true;
                     try {
                         obj.gain.gain.cancelScheduledValues(now);
-                        obj.gain.gain.setValueAtTime(obj.gain.gain.value || 0.0001, now); // 修正 3：加入錨點避免報錯
                         obj.gain.gain.setTargetAtTime(0.0001, now, fadeTime/3);
                     } catch(e) {}
                     obj.cleanup();
                 }
             });
             activeObjects = [];
-            challengeTarget = null;
-            tutorialTarget = null;
-            trainingTarget = null;
+
+            if (clearTargets) {
+                [challengeTarget, tutorialTarget, trainingTarget].forEach(obj => {
+                    if (obj && obj.gain) {
+                        obj.isMuted = true;
+                        try {
+                            obj.gain.gain.cancelScheduledValues(now);
+                            obj.gain.gain.setTargetAtTime(0.0001, now, fadeTime/3);
+                        } catch(e) {}
+                        obj.cleanup();
+                    }
+                });
+                challengeTarget = null;
+                tutorialTarget = null;
+                trainingTarget = null;
+            }
         }
 
         function initBackgroundVisuals() {
@@ -614,7 +616,6 @@
                 
                 try {
                     this.gain.gain.cancelScheduledValues(now);
-                    this.gain.gain.setValueAtTime(this.gain.gain.value || 0.0001, now);
                     this.gain.gain.setTargetAtTime(0.0001, now, timeConstant); 
                 } catch(e){}
                 
@@ -653,13 +654,16 @@
                 if (this.mode === 'sandbox') volBase *= 1.2; 
                 this.gain.gain.setTargetAtTime(volBase, now, tc);
 
+                // 修正 2：針對 Bell 確保漸變設定有安全錨點，避免產生 InvalidStateError
                 if (this.type.id === 'bell') {
                     this.nodes.forEach(n => {
                         if (n.type === 'env') {
                             if (now - n.lastTrigger > 1.0 + n.i*0.2) {
-                                n.gain.gain.setValueAtTime(0, now);
-                                n.gain.gain.linearRampToValueAtTime(1.0 / (n.i+1), now + 0.02);
-                                n.gain.gain.exponentialRampToValueAtTime(0.001, now + 1.0);
+                                try {
+                                    n.gain.gain.cancelScheduledValues(now);
+                                    n.gain.gain.setTargetAtTime(1.0 / (n.i+1), now, 0.01);
+                                    n.gain.gain.setTargetAtTime(0.0001, now + 0.1, 0.3);
+                                } catch(e) {}
                                 n.lastTrigger = now;
                             }
                         }
@@ -680,11 +684,16 @@
                     } catch(e){}
                 } 
             }
+            
             cleanup() { 
                 this.nodes.forEach(n => { 
                     try { if(n.node && typeof n.node.stop === 'function') n.node.stop(audioCtx.currentTime + 0.1); } catch(e){} 
                 });
-                this.nodes = []; this.gain = null;
+                this.nodes = []; 
+                if (this.gain) {
+                    try { this.gain.disconnect(); } catch(e){}
+                    this.gain = null;
+                }
             }
 
             update() {
@@ -819,7 +828,7 @@
         }
 
         function startFreeTrainingRound() {
-            if (trainingTarget) { trainingTarget.fadeOutAndStop(); trainingTarget = null; }
+            if (trainingTarget) { trainingTarget.startFadeOut(true); trainingTarget = null; }
             
             const randomScene = SCENE_KEYS[Math.floor(Math.random() * SCENE_KEYS.length)];
             setScene(randomScene);
@@ -868,7 +877,10 @@
         }
 
         function startNewChallenge() {
-            stopAllSounds(true); challengeState = 'listening'; document.getElementById('replay-ui').style.display = "none";
+            stopAllSounds(true, false); 
+            if(challengeTarget) { challengeTarget.startFadeOut(true); challengeTarget = null; }
+            
+            challengeState = 'listening'; document.getElementById('replay-ui').style.display = "none";
             const hint = document.getElementById('challenge-hint'); hint.innerHTML = `第 ${questionsDone + 1} 題：聆聽聲音移動...`; hint.style.opacity = 1;
             const randomType = Object.values(WAVE_TYPES)[Math.floor(Math.random() * 4)];
             
@@ -904,7 +916,7 @@
         function updateScoreUI() { document.getElementById('score-display').innerText = `題數: ${questionsDone}/5 | 總積分: ${totalScore}`; }
 
         function showFinalReport() {
-            challengeState = 'idle'; stopAllSounds(true);
+            challengeState = 'idle'; stopAllSounds(true, true);
             const overlay = document.getElementById('report-overlay'); const content = document.getElementById('report-content');
             content.innerHTML = `
                 <div style="font-size:32px; font-weight:bold; margin-bottom:10px;">${totalScore} <span style="font-size:16px">/ 100</span></div>
@@ -917,10 +929,10 @@
         function executeAction(actionStr) {
             try {
                 initAudio(); 
-                setHoverCooldown(1500); // 每次執行操作，強制給予 1.5 秒全域防呆
+                setHoverCooldown(1500); 
 
                 if (actionStr === 'return_menu') {
-                    stopAllSounds(true); appMode = 'menu';
+                    stopAllSounds(true, true); appMode = 'menu';
                     document.getElementById('main-menu').style.display = 'flex';
                     document.getElementById('in-game-ui').style.display = 'none';
                     document.getElementById('challenge-hint').style.opacity = 0;
@@ -963,20 +975,19 @@
                 }
                 else if (actionStr === 'start_tutorial') {
                     if (appMode === 'tutorial') return;
-                    stopAllSounds(true); appMode = 'tutorial'; 
+                    stopAllSounds(true, true); appMode = 'tutorial'; 
                     document.getElementById('main-menu').style.display = "none";
                     document.getElementById('in-game-ui').style.display = 'block';
                     document.getElementById('score-display').style.display = 'none';
                     document.getElementById('challenge-hint').style.opacity = 1;
                     document.querySelectorAll('.scene-btn').forEach(btn => btn.style.display = 'none');
 
-                    const originalScene = currentScene;
-
+                    // 修正 4：把缺失的 sceneId 參數補回函數宣告中
                     const runTutorialStep = (text, angle, dist, sceneId, delay) => {
                         return new Promise(resolve => {
                             if (appMode !== 'tutorial') return resolve(); 
                             document.getElementById('challenge-hint').innerHTML = text;
-                            if (sceneId && sceneId !== currentScene) window.setScene(sceneId); 
+                            if (sceneId && sceneId !== currentScene) setScene(sceneId); 
                             
                             if (angle !== null) {
                                 const pt = getMappedCoords(angle, dist || 1.0);
@@ -984,7 +995,8 @@
                                     tutorialTarget = new SoundEntity(WAVE_TYPES.BELL, 'tutorial', pt.x, pt.y);
                                     tutorialTarget.play();
                                 } else {
-                                    tutorialTarget.targetX = pt.x; tutorialTarget.targetY = pt.y;
+                                    tutorialTarget.targetX = pt.x;
+                                    tutorialTarget.targetY = pt.y;
                                 }
                             }
                             setTimeout(resolve, delay);
@@ -1001,9 +1013,13 @@
                         await runTutorialStep("【第二階段：距離與視覺映射】<br>極近距離 (0.5m)<br><span style='font-size:16px; color:#ffaa44'>聲音大且乾，視覺圖示放大</span>", 0, 0.5, 'bathroom', 4000);
                         await runTutorialStep("極遠距離 (3.0m)<br><span style='font-size:16px; color:#ffaa44'>音量衰減，殘響變強，圖示縮小</span>", 0, 3.0, 'bathroom', 4000);
 
-                        await runTutorialStep("【第三階段：觸覺尋標 (Haptic Homing)】<br>學理指出：動作與感知的迴圈能加速空間聽覺重建。<br><span style='font-size:16px; color:#ffaa44'>待會訓練時，聲音將會隱藏...</span>", null, null, 4000);
+                        await runTutorialStep("【第三階段：聲場環境】<br>清澈水域 (一般室內)<br><span style='font-size:16px; color:#bb66ff'>空間較小，尾音收得快</span>", 0, 2.0, 'bathroom', 4000);
+                        await runTutorialStep("幽暗海洞 (天然山洞)<br><span style='font-size:16px; color:#bb66ff'>注意聆聽深邃的低頻與綿長的反射尾音</span>", 0, 2.0, 'cave', 4500);
+
+                        await runTutorialStep("【第四階段：觸覺尋標 (Haptic Homing)】<br>學理指出：動作與感知的迴圈能加速空間聽覺重建。<br><span style='font-size:16px; color:#ffaa44'>待會訓練時，聲音將會隱藏...</span>", null, null, 'bathroom', 4000);
                         
-                        if (tutorialTarget) { tutorialTarget.fadeOutAndStop(); tutorialTarget = null; }
+                        if (appMode !== 'tutorial') return; 
+                        if (tutorialTarget) { tutorialTarget.startFadeOut(true); tutorialTarget = null; }
                         
                         const pt = getMappedCoords(45, 1.5);
                         trainingTarget = new SoundEntity(WAVE_TYPES.FROG, 'training', pt.x, pt.y);
@@ -1016,7 +1032,7 @@
                     })();
                 } 
                 else if (actionStr.startsWith('scene-')) {
-                    const s = actionStr.split('-')[1]; window.setScene(s);
+                    const s = actionStr.split('-')[1]; setScene(s);
                 } 
                 else if (actionStr === 'start_play') {
                     if (challengeState === 'preparing') startNewChallenge();
@@ -1028,19 +1044,20 @@
                 } 
                 else if (actionStr === 'start_replay_answer') {
                     if (!challengeTarget) return; 
-                    stopAllSounds(true); challengeState = 'replaying_answer'; replayIndex = 0; 
+                    stopAllSounds(true, false); challengeState = 'replaying_answer'; replayIndex = 0; 
                     document.getElementById('replay-ui').style.display = "none"; 
                     document.getElementById('challenge-hint').innerHTML = "正在進行軌跡複習..."; 
-                    challengeTarget.life = 1.0; challengeTarget.play();
+                    challengeTarget.life = 1.0; challengeTarget.isFading = false; challengeTarget.play();
                 } 
                 else if (actionStr === 'replay_question') {
                     if (!challengeTarget) return; 
-                    stopAllSounds(true); challengeState = 'replaying_question'; replayIndex = 0; 
+                    stopAllSounds(true, false); challengeState = 'replaying_question'; replayIndex = 0; 
                     document.getElementById('challenge-hint').innerHTML = "重新聆聽中..."; 
-                    challengeTarget.life = 1.0; challengeTarget.play();
+                    challengeTarget.life = 1.0; challengeTarget.isFading = false; challengeTarget.play();
                 } 
                 else if (actionStr === 'guess_target') {
-                    handleChallengeGuess(pointerX, pointerY);
+                    if (appMode === 'training') revealTarget();
+                    else handleChallengeGuess(pointerX, pointerY);
                 } 
                 else if (actionStr.startsWith('palette-')) {
                     if (appMode !== 'menu') return; 
@@ -1051,7 +1068,7 @@
                     const pId = actionStr.split('-')[1];
                     const typeInfo = Object.values(WAVE_TYPES).find(t => t.id === pId);
                     if (typeInfo) {
-                        stopAllSounds(true); 
+                        stopAllSounds(true, false); 
                         const n = new SoundEntity(typeInfo, 'sandbox', pointerX, pointerY); 
                         activeObjects.push(n); n.play();
                     }
@@ -1099,7 +1116,7 @@
         }
 
         function drawHoverCursor() {
-            if (!isSystemUnlocked) return; // 修正：解鎖前徹底凍結游標繪製，防止隱形觸發
+            if (!isSystemUnlocked) return; 
 
             cursorCtx.clearRect(0, 0, width, height); 
             cursorCtx.save();
@@ -1137,8 +1154,7 @@
                     
                     if (progress >= 1.0) {
                         hasTriggered = true; 
-                        if (hoverTarget.action === 'guess_target') revealTarget();
-                        else executeAction(hoverTarget.action);
+                        executeAction(hoverTarget.action);
                         
                         cursorCtx.beginPath(); cursorCtx.arc(0, 0, 30, 0, Math.PI*2); 
                         cursorCtx.fillStyle = hoverTarget.action === 'guess_target' ? "rgba(255, 170, 68, 0.4)" : "rgba(68, 255, 170, 0.4)"; 
@@ -1150,7 +1166,7 @@
         }
 
         function checkHoverTargets() {
-            if (!isSystemUnlocked) return; // 修正：解鎖前不進行任何熱區判斷
+            if (!isSystemUnlocked) return; 
 
             let newTarget = null;
             document.querySelectorAll('button').forEach(b => b.classList.remove('hovering'));
