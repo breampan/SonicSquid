@@ -1,800 +1,179 @@
-<!DOCTYPE html>
-<html lang="zh-TW">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Cyber Squid - Stereo Grip</title>
-  
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+import asyncio
+import struct
+import time
+import random
+import numpy as np
+import sounddevice as sd
+from bleak import BleakClient, BleakScanner
 
-  <style>
-    body { margin: 0; padding: 0; background: #000; overflow: hidden; touch-action: none; font-family: 'Courier New', monospace; }
-    
-    #overlay {
-      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-      background: linear-gradient(to bottom, #051020, #000);
-      display: flex; flex-direction: column;
-      justify-content: center; align-items: center; z-index: 999;
-      color: #0ff; text-align: center;
-    }
-    
-    .btn-group { display: flex; gap: 20px; margin-top: 30px; }
-    
-    button {
-      padding: 15px 40px; font-size: 20px; color: #0ff;
-      background: rgba(0, 255, 255, 0.1); border: 2px solid #0ff; border-radius: 50px;
-      cursor: pointer; letter-spacing: 2px;
-      box-shadow: 0 0 15px rgba(0, 255, 255, 0.2);
-      transition: all 0.2s;
-    }
-    button:hover { background: rgba(0, 255, 255, 0.3); transform: scale(1.05); }
-    button:active { transform: scale(0.95); }
-    button:disabled { border-color: #555; color: #555; cursor: not-allowed; opacity: 0.6; }
+# --- 音訊全域設定 ---
+SAMPLERATE = 44100
+CHANNELS = 2
+poly_voices = {}
+last_accel = {}
+last_trigger = {}
+connected_addresses = set() # 用來記錄已連線的 MAC，避免重複指派
 
-    #hid-status {
-        margin-top: 20px; font-size: 14px; color: #888;
-        display: flex; flex-direction: column; gap: 8px;
-        background: rgba(0,0,0,0.5); padding: 15px; border-radius: 10px;
-        min-width: 300px; text-align: left;
-    }
-    .device-row { display: flex; justify-content: space-between; width: 100%; align-items: center; }
-    .indicator { width: 10px; height: 10px; border-radius: 50%; background: #333; margin-right: 10px; display: inline-block;}
-    .indicator.active { background: #0f0; box-shadow: 0 0 8px #0f0; }
+# --- 隨機 Echo 緩衝區設定 ---
+MAX_DELAY_SEC = 0.5
+MAX_DELAY_SAMPLES = int(SAMPLERATE * MAX_DELAY_SEC)
+delay_buffer = np.zeros((MAX_DELAY_SAMPLES, CHANNELS))
+delay_ptr = 0
+current_delay_samples = int(SAMPLERATE * 0.3)
 
-    #hud { position: absolute; top: 20px; left: 20px; color: #0ff; font-size: 24px; pointer-events: none; text-shadow: 0 0 5px #0ff; display: none; font-weight: bold; }
-    #hp-bar { position: absolute; top: 20px; right: 20px; font-size: 30px; color: #ff5555; text-shadow: 0 0 5px #f00; display: none; text-align: right; }
-
-    .combo-text { position: absolute; color: #ffff00; font-weight: bold; font-size: 24px; pointer-events: none; animation: floatUp 1s forwards; text-shadow: 0 0 10px #ffaa00; z-index: 10; }
-    .jackpot-text { position: absolute; color: #FFD700; font-weight: bold; font-size: 50px; pointer-events: none; animation: zoomOut 3s forwards; text-shadow: 0 0 30px #ffffff; z-index: 20; width: 100%; text-align: center; top: 35%; }
-    .evo-text { position: absolute; color: #00ffff; font-weight: bold; font-size: 40px; pointer-events: none; animation: zoomOut 2s forwards; text-shadow: 0 0 20px #ffffff; z-index: 20; width: 100%; text-align: center; top: 30%; }
-    
-    @keyframes floatUp { 0% { transform: translateY(0) scale(1); opacity: 1; } 50% { transform: translateY(-30px) scale(1.5); opacity: 1; } 100% { transform: translateY(-60px) scale(1); opacity: 0; } }
-    @keyframes zoomOut { 0% { transform: scale(0.5); opacity: 0; } 50% { transform: scale(1.2); opacity: 1; } 100% { transform: scale(2.0); opacity: 0; } }
-  </style>
-</head>
-<body>
-
-  <div id="hud">SCORE: <span id="score-val">0</span></div>
-  <div id="hp-bar">❤❤❤</div>
-
-  <div id="overlay">
-    <h1 style="text-shadow: 0 0 20px #0ff; font-size: 50px; margin-bottom: 0;">深海烏賊</h1>
-    <p style="color: #0aa; font-size: 16px;">雙球立體聲版 (WebHID)</p>
-    
-    <div class="btn-group">
-        <button id="hid-btn">🔵 配對/掃描 MB02</button>
-        <button id="start-btn" disabled>等待連接...</button>
-    </div>
-    
-    <div id="hid-status">
-        <div class="device-row" id="row-p1">
-            <span><div class="indicator" id="led-p1"></div> P1 (左聲道)</span>
-            <span id="debug-p1" style="font-family: monospace; color: #555;">--</span>
-        </div>
-        <div class="device-row" id="row-p2" style="border-top: 1px solid #333; padding-top: 5px;">
-            <span><div class="indicator" id="led-p2"></div> P2 (右聲道)</span>
-            <span id="debug-p2" style="font-family: monospace; color: #555;">--</span>
-        </div>
-    </div>
-  </div>
-
-<script>
-// ==========================================
-//  PART 0: WebHID 自動管理系統
-// ==========================================
-const GRIP_VENDOR_ID = 0x08E2;
-const GRIP_PRODUCT_ID = 0x0101;
-
-// ★ 調整後的體感參數 ★
-const PUNCH_THRESHOLD = 6.0;
-const PUNCH_COOLDOWN = 220; // 增加到 220ms 以過濾重複觸發
-
-let activeDevices = [];
-let deviceStates = new Map();
-
-if (!("hid" in navigator)) {
-    document.getElementById('hid-btn').innerText = "⚠️ 不支援 WebHID";
-    document.getElementById('hid-btn').disabled = true;
-} else {
-    navigator.hid.addEventListener('connect', handleDeviceConnect);
-    navigator.hid.addEventListener('disconnect', handleDeviceDisconnect);
-    checkPreviouslyPairedDevices();
-}
-
-async function checkPreviouslyPairedDevices() {
-    const devices = await navigator.hid.getDevices();
-    const mb02Devices = devices.filter(d => d.vendorId === GRIP_VENDOR_ID && d.productId === GRIP_PRODUCT_ID);
-    if (mb02Devices.length > 0) {
-        for (let d of mb02Devices) { await openDevice(d); }
-    }
-}
-
-async function requestNewDevice() {
-    try {
-        const devices = await navigator.hid.requestDevice({
-            filters: [{ vendorId: GRIP_VENDOR_ID, productId: GRIP_PRODUCT_ID }]
-        });
-        for (let d of devices) { await openDevice(d); }
-    } catch (err) { console.error("配對取消", err); }
-}
-
-function handleDeviceConnect(event) {
-    const device = event.device;
-    if (device.vendorId === GRIP_VENDOR_ID && device.productId === GRIP_PRODUCT_ID) {
-        openDevice(device);
-    }
-}
-
-function handleDeviceDisconnect(event) {
-    const device = event.device;
-    activeDevices = activeDevices.filter(d => d !== device);
-    deviceStates.delete(device);
-    updateUI();
-}
-
-async function openDevice(device) {
-    if (activeDevices.includes(device)) return;
-    if (!device.opened) {
-        try { await device.open(); } catch(e) { console.error(e); return; }
-    }
-    device.addEventListener("inputreport", handleInputReport);
-    activeDevices.push(device);
-    deviceStates.set(device, { lastForce: 0, lastTime: 0 });
-    updateUI();
-}
-
-function updateUI() {
-    const p1Status = document.getElementById('led-p1');
-    const p2Status = document.getElementById('led-p2');
-    const btn = document.getElementById('start-btn');
-    
-    if (activeDevices.length > 0) {
-        p1Status.classList.add('active');
-        btn.disabled = false;
-        btn.innerText = "開始冒險";
-        btn.style.borderColor = "#0f0";
-        btn.style.color = "#0f0";
-    } else {
-        p1Status.classList.remove('active');
-        btn.disabled = true;
-        btn.innerText = "等待裝置...";
-        btn.style.borderColor = "#555";
-        btn.style.color = "#555";
-    }
-    
-    if (activeDevices.length > 1) p2Status.classList.add('active');
-    else p2Status.classList.remove('active');
-}
-
-function handleInputReport(event) {
-    const { data, device } = event;
-    if (data.byteLength < 32) return;
-
-    const ax = data.getFloat32(4, true);
-    const ay = data.getFloat32(8, true);
-    const az = data.getFloat32(12, true);
-    
-    const currentForce = Math.sqrt(ax*ax + ay*ay + az*az);
-    const now = Date.now();
-    
-    let state = deviceStates.get(device);
-    if (!state) return;
-
-    const delta = Math.abs(currentForce - state.lastForce);
-    const playerIndex = activeDevices.indexOf(device); // 0 = P1, 1 = P2
-    
-    // Debug Display
-    const debugId = playerIndex === 0 ? 'debug-p1' : (playerIndex === 1 ? 'debug-p2' : null);
-    if (debugId) document.getElementById(debugId).innerText = `G: ${delta.toFixed(1)}`;
-
-    // Trigger
-    if (delta > PUNCH_THRESHOLD && (now - state.lastTime > PUNCH_COOLDOWN)) {
-        if (debugId) {
-            document.getElementById(debugId).style.color = "#fff";
-            setTimeout(() => document.getElementById(debugId).style.color = "#555", 100);
-        }
-
-        // ★ 呼叫動作，並傳入玩家編號 (1 or 2) 以便做 Panning ★
-        triggerPlayerAction(playerIndex + 1);
+class FMVoice:
+    def __init__(self, voice_id):
+        self.id = voice_id
+        self.freq = 880.0
+        self.mod_index = 0.8
+        self.ratio = 11.72
+        self.phase_c = 0
+        self.phase_m = 0
         
-        state.lastTime = now;
-    }
-    state.lastForce = currentForce;
-}
-
-// 統一觸發 (接收玩家編號 1 或 2)
-function triggerPlayerAction(playerNum) {
-    // ★ 關鍵修正：只有在遊戲進行中 (gameState 1) 才允許跳躍和發聲 ★
-    // 這樣倒數時 (gameState 4) 握力球就會被靜音
-    if (gameState !== 1) return;
-
-    if (!squid) return;
-    let power = random(0.6, 0.9);
-    squid.jump(power);
-    
-    // 播放帶有 Panning 的音效
-    playJumpSound(power, playerNum);
-}
-
-// ==========================================
-//  PART 1: 聲音系統 (立體聲 + 方波珍珠)
-// ==========================================
-let jumpSynthP1, jumpSynthP2; // 分離的跳躍合成器
-let fallSynth, collectSynth, collisionSynth, levelUpSynth, jackpotSynth, victorySynth, dieSynth;
-let ambientNoise;
-let pearlSynths = []; let pearlSynthIndex = 0;
-let isAudioReady = false; let audioInitStarted = false;
-let lastJumpPitch = 600; let fallTimeoutID = null; let isFallingSoundPlaying = false;
-const noteMap = ["C5", "D5", "E5", "G5", "A5", "C6", "D6", "E6", "G6", "A6", "C7", "E7", "G7"];
-
-async function initAudio(startNow = true) {
-    if (audioInitStarted) return;
-    audioInitStarted = true;
-    
-    const btn = document.getElementById('start-btn');
-    if(startNow) btn.innerText = "啟動中...";
-    
-    try {
-        await Tone.start();
-        if (Tone.context.state !== 'running') await Tone.context.resume();
-        Tone.Destination.volume.value = 0;
-
-        // ★ P1 (左) 跳躍音效 ★
-        const panner1 = new Tone.Panner(-0.8).toDestination();
-        jumpSynthP1 = new Tone.Synth({
-            oscillator: { type: "sine" },
-            envelope: { attack: 0.02, decay: 0.3, sustain: 0, release: 0.5 }
-        }).connect(panner1);
-        jumpSynthP1.volume.value = -2;
-
-        // ★ P2 (右) 跳躍音效 ★
-        const panner2 = new Tone.Panner(0.8).toDestination();
-        jumpSynthP2 = new Tone.Synth({
-            oscillator: { type: "sine" },
-            envelope: { attack: 0.02, decay: 0.3, sustain: 0, release: 0.5 }
-        }).connect(panner2);
-        jumpSynthP2.volume.value = -2;
-
-        fallSynth = new Tone.Synth({ oscillator: { type: "sine" }, envelope: { attack: 0.005, decay: 0.1, sustain: 0, release: 0.1 } }).toDestination();
-        fallSynth.volume.value = -5;
-
-        for(let i=0; i<15; i++) {
-            let s = new Tone.Synth({ oscillator: { type: "square" }, envelope: { attack: 0.005, decay: 0.1, sustain: 0, release: 0.1 } }).toDestination();
-            s.volume.value = -12; pearlSynths.push(s);
-        }
+        # 調整為 80Hz 驅動水波，波紋會更密集細緻
+        self.sub_freq = 80.0
+        self.phase_sub = 0
         
-        levelUpSynth = new Tone.PolySynth(Tone.Synth, { oscillator: { type: "sawtooth" }, envelope: { attack: 0.05, decay: 0.5, sustain: 0.3, release: 1.5 } }).toDestination();
-        levelUpSynth.volume.value = -8;
+        self.amp = 0.0
+        self.decay_rate = 0.9998
+        self.cutoff = 2000.0
+        self.last_out = 0.0
+        self.pan = random.uniform(0.2, 0.8)
 
-        jackpotSynth = new Tone.Synth({ oscillator: { type: "square" }, envelope: { attack: 0.01, decay: 0.1, sustain: 0.1, release: 0.1 } }).toDestination();
-        jackpotSynth.volume.value = -10;
-
-        victorySynth = new Tone.PolySynth(Tone.Synth, { oscillator: { type: "fatsawtooth", count: 3, spread: 30 }, envelope: { attack: 0.1, decay: 0.5, sustain: 1.0, release: 4.0 } }).toDestination();
-        victorySynth.volume.value = -15;
-
-        collisionSynth = new Tone.FMSynth({ harmonicity: 3.0, modulationIndex: 10, oscillator: { type: "sine" }, modulation: { type: "square" }, envelope: { attack: 0.001, decay: 0.3, sustain: 0, release: 0.3 }, modulationEnvelope: { attack: 0.001, decay: 0.3, sustain: 0, release: 0.3 } }).toDestination();
-        collisionSynth.volume.value = -2;
+    def trigger(self, power):
+        global current_delay_samples
+        self.amp = min(1.0, power / 3.0 + 0.2)
+        self.decay_rate = random.uniform(0.99975, 0.99988)
         
-        dieSynth = new Tone.NoiseSynth({ noise: { type: "brown" }, envelope: { attack: 0.01, decay: 0.5, sustain: 0 } }).toDestination();
-        dieSynth.volume.value = -2;
+        random_sec = random.uniform(0.15, 0.45)
+        current_delay_samples = int(SAMPLERATE * random_sec)
+        self.ratio = 11.72 + random.uniform(-0.1, 0.1)
 
-        let filter = new Tone.Filter(200, "lowpass").toDestination();
-        ambientNoise = new Tone.Noise("brown").connect(filter);
-        ambientNoise.volume.value = -22; ambientNoise.start();
-
-        // 倒數音效使用其中一個 synth 即可 (例如 P1 的，但設為中間)
-        // 為了簡單，我們直接用 jumpSynthP1 發聲，或者額外宣告一個 countdown synth
-        // 這裡直接借用 fallSynth 來發倒數音，因為它是單聲道且在中間 (預設)
+    def next_block(self, frames):
+        t = (np.arange(frames) / SAMPLERATE)
         
-        isAudioReady = true;
+        # 1. 產生高頻
+        mod_freq = self.freq * self.ratio
+        m_vals = np.sin(self.phase_m + 2 * np.pi * mod_freq * t) * self.mod_index
+        raw_fm = np.sin(self.phase_c + 2 * np.pi * self.freq * t + m_vals) * self.amp
         
-        if(startNow) {
-            document.getElementById('overlay').style.display = 'none';
-            document.getElementById('hud').style.display = 'block';
-            document.getElementById('hp-bar').style.display = 'block';
-            startCountdown();
-        }
+        # 2. 產生平行的 80Hz
+        raw_sub = np.sin(self.phase_sub + 2 * np.pi * self.sub_freq * t) * self.amp
+        
+        # 濾波與相位更新
+        alpha = self.cutoff / (self.cutoff + SAMPLERATE / (2 * np.pi))
+        filtered_fm = np.zeros(frames)
+        current_last = self.last_out
+        for i in range(frames):
+            current_last = current_last + alpha * (raw_fm[i] - current_last)
+            filtered_fm[i] = current_last
+        self.last_out = current_last
+        
+        self.phase_c = (self.phase_c + 2 * np.pi * self.freq * frames / SAMPLERATE) % (2 * np.pi)
+        self.phase_m = (self.phase_m + 2 * np.pi * mod_freq * frames / SAMPLERATE) % (2 * np.pi)
+        self.phase_sub = (self.phase_sub + 2 * np.pi * self.sub_freq * frames / SAMPLERATE) % (2 * np.pi)
+        
+        self.amp *= (self.decay_rate ** frames)
+        if self.amp < 0.0005: self.amp = 0
+        
+        fm_stereo = np.zeros((frames, 2))
+        fm_stereo[:, 0] = filtered_fm * (1.0 - self.pan)
+        fm_stereo[:, 1] = filtered_fm * self.pan
+        
+        sub_stereo = np.zeros((frames, 2))
+        sub_stereo[:, 0] = raw_sub
+        sub_stereo[:, 1] = raw_sub
+        
+        return fm_stereo, sub_stereo
 
-    } catch (e) { console.error("Audio Init Error:", e); }
-}
-
-function playJumpSound(power, playerNum) {
-    if (!isAudioReady) return;
-    stopFallingSequence();
-    let pitch = map(power, 0.0, 1.0, 300, 700);
-    lastJumpPitch = pitch;
+def audio_callback(outdata, frames, time, status):
+    global delay_ptr
+    mixed_fm = np.zeros((frames, 2))
+    mixed_sub = np.zeros((frames, 2))
     
-    // 根據玩家選擇發聲器
-    let targetSynth;
-    if (playerNum === 2) targetSynth = jumpSynthP2;
-    else targetSynth = jumpSynthP1; // 預設 P1 (左/中)
-
-    if (squid && squid.evolutionLevel >= 5) {
-        targetSynth.oscillator.type = "square"; targetSynth.volume.value = -12;
-    } else {
-        targetSynth.oscillator.type = "sine"; targetSynth.volume.value = -2;
-    }
+    for v in poly_voices.values():
+        fm_out, sub_out = v.next_block(frames)
+        mixed_fm += fm_out
+        mixed_sub += sub_out
     
-    try { targetSynth.triggerAttackRelease(pitch, "8n"); } catch(e){}
-}
-
-function playCountdownBeep(pitch) {
-    if (!isAudioReady) return;
-    // 使用 fallSynth 代替倒數音 (確保置中)
-    try {
-        fallSynth.oscillator.type = "sine";
-        fallSynth.volume.value = -5;
-        fallSynth.triggerAttackRelease(pitch, "32n");
-    } catch(e){}
-}
-
-function playCollectSound(comboIndex) {
-    if (!isAudioReady) return;
-    let index = (comboIndex % 10);
-    try { pearlSynths[pearlSynthIndex].triggerAttackRelease(noteMap[index], "32n"); pearlSynthIndex = (pearlSynthIndex + 1) % pearlSynths.length; } catch(e){}
-}
-
-function playLevelUpSound() { if (!isAudioReady) return; try { levelUpSynth.triggerAttackRelease(["C5", "E5", "G5", "C6"], "8n"); } catch(e){} }
-
-function playJackpotSound() {
-    if (!isAudioReady) return;
-    let now = Tone.now();
-    let notes = ["C6", "B5", "A5", "G5", "F5", "E5", "D5", "C5", "B4", "A4", "G4", "F4", "E4", "D4", "C4"];
-    for (let i = 0; i < notes.length; i++) { jackpotSynth.triggerAttackRelease(notes[i], "32n", now + (i * 0.05)); }
-}
-
-function playVictorySound() { if (!isAudioReady) return; try { victorySynth.triggerAttackRelease(["C3", "G3", "C4", "E4", "G4", "C5", "E5", "C6"], "1n"); } catch(e){} }
-function playCollisionSound() { if (!isAudioReady) return; try { collisionSynth.triggerAttackRelease("C3", "8n"); collisionSynth.frequency.rampTo("C2", 0.1); } catch(e){} }
-function playDieSound() { if (!isAudioReady) return; try { dieSynth.triggerAttackRelease("4n"); collisionSynth.triggerAttackRelease("C2", "2n"); collisionSynth.frequency.rampTo("C1", 1); } catch(e){} }
-
-function startFallingSequence() {
-    if (!isAudioReady || isFallingSoundPlaying) return;
-    isFallingSoundPlaying = true;
-    let currentPitch = lastJumpPitch; let currentGap = 0.15; let currentVol = -5;
-    // 掉落音效統一用 fallSynth (置中)
-    fallSynth.oscillator.type = (squid && squid.evolutionLevel >= 5) ? "square" : "sine";
-    fallSynth.volume.value = (squid && squid.evolutionLevel >= 5) ? -12 : -5;
-
-    function playBeat() {
-        if (!isFallingSoundPlaying) return;
-        let now = Tone.now();
-        try { fallSynth.triggerAttackRelease(currentPitch, currentGap * 0.8, now, Tone.dbToGain(currentVol)); } catch(e){}
-        currentPitch *= 0.85; currentGap *= 0.8; currentVol -= 2;
-        if (currentPitch > 50 && currentGap > 0.02) { fallTimeoutID = setTimeout(playBeat, currentGap * 1000); } else { isFallingSoundPlaying = false; }
-    }
-    playBeat();
-}
-function stopFallingSequence() { isFallingSoundPlaying = false; if (fallTimeoutID) { clearTimeout(fallTimeoutID); fallTimeoutID = null; } }
-
-// ==========================================
-//  PART 2: 遊戲邏輯 (累積計數 + 防卡死)
-// ==========================================
-let squid;
-let particles = []; let stars = []; let terrain; let pearls = [];
-let gameState = 0; let score = 0; let gameSpeed = 3; let shakeAmount = 0; let canRestart = false;
-let comboCount = 0; let comboTimer = 0; let totalPearls = 0;
-const COMBO_TIME_LIMIT = 300; const VICTORY_PEARLS = 60;
-let startCountdownTimer = 0;
-
-function setup() {
-    createCanvas(windowWidth, windowHeight);
-    squid = new TechSquid(width * 0.25, height/2);
-    terrain = new CaveTerrain();
-    
-    document.getElementById('start-btn').onclick = () => initAudio(true);
-    document.getElementById('hid-btn').onclick = requestNewDevice;
-    noLoop();
-}
-
-function startCountdown() {
-    if (!squid) squid = new TechSquid(width * 0.25, height/2);
-    else {
-        squid.reset(width * 0.25, height/2);
-        squid.evolutionLevel = 0;
-        squid.updateColorByLevel();
-        squid.size = 60;
-    }
-    terrain.reset(true); pearls = []; particles = []; stars = [];
-    score = 0; comboCount = 0; totalPearls = 0;
-    gameState = 4; startCountdownTimer = 180;
-    updateHPDisplay(); loop();
-}
-
-function startGame() { gameState = 1; score = 0; gameSpeed = 3.5; updateHPDisplay(); }
-
-function updateHPDisplay() {
-    let hp = squid.hp;
-    let hpElement = document.getElementById('hp-bar');
-    let heartSymbol = "❤"; let color = "#ff5555";
-    if (hp > 20) { heartSymbol = "👑"; color = "#ffd700"; }
-    else if (hp > 10) { heartSymbol = "💛"; color = "#ffff00"; }
-    else if (hp > 5) { heartSymbol = "💙"; color = "#00ffff"; }
-    if (hp > 15) { hpElement.innerText = heartSymbol + " x" + hp; }
-    else { let str = ""; for(let i=0; i<hp; i++) str += heartSymbol; hpElement.innerText = str; }
-    hpElement.style.color = color; hpElement.style.textShadow = `0 0 5px ${color}`;
-}
-
-function showComboText(x, y, count) {
-    let el = document.createElement('div');
-    el.className = 'combo-text'; el.style.left = x + 'px'; el.style.top = y + 'px';
-    el.innerText = count > 1 ? "COMBO x" + count + "!" : "NICE!";
-    if(count > 5) el.style.color = "#ff00ff";
-    document.body.appendChild(el); setTimeout(() => { document.body.removeChild(el); }, 1000);
-}
-
-function showEvoText(text) {
-    let el = document.createElement('div');
-    el.className = 'evo-text'; el.innerHTML = text;
-    document.body.appendChild(el); setTimeout(() => { document.body.removeChild(el); }, 2000);
-}
-
-function showJackpotText() {
-    let el = document.createElement('div');
-    el.className = 'jackpot-text'; el.innerHTML = "JACKPOT!<br>SUPER SQUID MODE!";
-    document.body.appendChild(el); setTimeout(() => { document.body.removeChild(el); }, 3000);
-}
-
-function draw() {
-    push();
-    if (shakeAmount > 0) {
-        translate(random(-shakeAmount, shakeAmount), random(-shakeAmount, shakeAmount));
-        shakeAmount *= 0.9;
-        if(shakeAmount < 0.5) shakeAmount = 0;
-    }
-    
-    if (gameState === 3) {
-        let ctx = drawingContext;
-        let g = ctx.createLinearGradient(0, 0, 0, height);
-        g.addColorStop(0, "#FFFFE0"); g.addColorStop(1, "#FFD700");
-        ctx.fillStyle = g; ctx.fillRect(0,0,width,height);
-    } else {
-        drawBackground();
-    }
-
-    if (gameState === 4) {
-        terrain.display(); squid.display();
-        startCountdownTimer--;
-        let seconds = ceil(startCountdownTimer / 60);
-        // ★ 倒數音 (3,2,1 C5 / GO C6)
-        if (startCountdownTimer % 60 === 0 && startCountdownTimer > 0) playCountdownBeep("C5");
-        if (startCountdownTimer === 0) playCountdownBeep("C6");
+    for i in range(frames):
+        read_ptr = (delay_ptr - current_delay_samples) % MAX_DELAY_SAMPLES
+        delayed_signal = delay_buffer[read_ptr]
         
-        textAlign(CENTER, CENTER); textStyle(BOLD); textSize(150);
-        if (startCountdownTimer > 0) { fill(255); text(seconds, width/2, height/2); }
-        else { fill(0, 255, 255); text("GO!", width/2, height/2); }
-        if (startCountdownTimer < -30) startGame();
-
-    } else if (gameState === 1) {
-        gameSpeed += 0.0002;
+        # 混合輸出，80Hz 維持最高推力且不進 Echo
+        outdata[i] = mixed_fm[i] * 0.6 + delayed_signal * 0.35 + mixed_sub[i] * 1.0
         
-        let hasPearlOnScreen = pearls.some(p => p.pos.x > 0 && p.pos.x < width);
-        if (comboCount > 0) {
-            if (hasPearlOnScreen) comboTimer--;
-            if (comboTimer <= 0) comboCount = 0;
-        }
-        
-        terrain.update(); terrain.display();
+        dynamic_feedback = 0.42 + random.uniform(-0.03, 0.03)
+        delay_buffer[delay_ptr] = (mixed_fm[i] + delayed_signal * dynamic_feedback)
+        delay_ptr = (delay_ptr + 1) % MAX_DELAY_SAMPLES
 
-        if (frameCount % 80 === 0 && random() > 0.2) {
-            pearls.push(new Pearl(width, terrain.getCenterY(width)));
-        }
-        for (let i = pearls.length - 1; i >= 0; i--) {
-            let p = pearls[i];
-            p.update(); p.display();
+def handle_imu_data(imu_id, data):
+    # 確保只解析 55 61 封包
+    if len(data) < 20 or data[0] != 0x55 or data[1] != 0x61: return
+    vals = struct.unpack('<hhhhhhhhh', data[2:20])
+    ax, ay, az = [v / 32768.0 * 16 for v in vals[0:3]]
+    current_g = (ax**2 + ay**2 + az**2)**0.5
+    roll = vals[6] / 32768.0 * 180
+    pitch = vals[7] / 32768.0 * 180
+
+    if imu_id in poly_voices:
+        v = poly_voices[imu_id]
+        v.freq = 600 + (pitch + 90) * 12
+        v.cutoff = 2000 + abs(roll) * 45
+        
+        now = time.time()
+        prev_g = last_accel.get(imu_id, 1.0)
+        delta_g = abs(current_g - prev_g)
+        last_accel[imu_id] = current_g
+        
+        if (current_g > 1.8 or delta_g > 0.8) and (now - last_trigger.get(imu_id, 0) > 0.15):
+            v.trigger(current_g)
+            last_trigger[imu_id] = now
+            print(f"💧 IMU {imu_id} Wave Trigger! G:{current_g:.2f}")
+
+async def connect_imu(device, imu_id):
+    WRITE_CHAR = "0000ffe9-0000-1000-8000-00805f9a34fb"
+    NOTIFY_CHAR = "0000ffe4-0000-1000-8000-00805f9a34fb"
+    try:
+        async with BleakClient(device) as client:
+            poly_voices[imu_id] = FMVoice(imu_id)
+            print(f"✅ IMU {imu_id} 就緒 ({device.name})")
             
-            if (p.hits(squid)) {
-                comboCount++; totalPearls++; comboTimer = COMBO_TIME_LIMIT; score += 100 + (comboCount * 50);
-                
-                let potentialLevel = floor(totalPearls / 10);
-                if (potentialLevel <= 5 && potentialLevel > squid.evolutionLevel) {
-                    squid.setEvolution(potentialLevel);
-                    playLevelUpSound();
-                    let names = ["", "透抽進化!", "水母進化!", "海馬進化!", "燈籠魚進化!", "黃金霸主!"];
-                    showEvoText(names[potentialLevel]);
-                    squid.hp++; updateHPDisplay();
-                    for(let k=0; k<20; k++) stars.push(new StarParticle(p.pos.x, p.pos.y));
-                }
-                
-                if (totalPearls >= VICTORY_PEARLS) {
-                    triggerVictory();
-                } else if (comboCount > 0 && comboCount % 10 === 0) {
-                    playJackpotSound();
-                    score += 1000;
-                    showJackpotText();
-                    for(let k=0; k<30; k++) stars.push(new StarParticle(p.pos.x, p.pos.y));
-                } else {
-                    playCollectSound(comboCount);
-                    showComboText(screenPosition(p.pos.x), screenPosition(p.pos.y), comboCount);
-                    for(let k=0; k<8; k++) particles.push(new Bubble(p.pos.x, p.pos.y, true));
-                }
-                pearls.splice(i, 1);
-            } else if (p.offscreen()) {
-                pearls.splice(i, 1);
-            }
-        }
+            await client.start_notify(NOTIFY_CHAR, lambda s, d: handle_imu_data(imu_id, d))
+            await client.write_gatt_char(WRITE_CHAR, bytes([0xFF, 0xAA, 0x69, 0x88, 0xB5]))
+            
+            while client.is_connected:
+                await asyncio.sleep(1)
+    except Exception as e:
+        print(f"❌ IMU {imu_id} 連線中斷: {e}")
+    finally:
+        poly_voices.pop(imu_id, None)
+        connected_addresses.discard(device.address)
+        print(f"ℹ️ IMU {imu_id} 已釋放，等待重新連線")
 
-        squid.update(); squid.display();
-        
-        if (squid.pos.x < -squid.size) { squid.hp = 0; triggerDeath(); }
-        if (squid.vel.y > 2.5 && !isFallingSoundPlaying) startFallingSequence();
+async def manager():
+    with sd.OutputStream(channels=2, callback=audio_callback, samplerate=SAMPLERATE):
+        print("=== 80Hz 高速水波驅動引擎 啟動 ===")
+        print("正在高速掃描... 請打開所有傳感器電源")
+        while True:
+            # 如果還沒連滿 4 顆，進入高速掃描模式
+            if len(poly_voices) < 4:
+                devices = await BleakScanner.discover(timeout=1.0)
+                for d in devices:
+                    if d.name and d.name.startswith("WT") and d.address not in connected_addresses:
+                        # 核心邏輯：自動尋找 1~4 之間尚未被使用的最小編號
+                        used_ids = set(poly_voices.keys())
+                        if len(used_ids) >= 4: break
+                        new_id = next(i for i in range(1, 5) if i not in used_ids)
+                        
+                        connected_addresses.add(d.address)
+                        asyncio.create_task(connect_imu(d, new_id))
+                # 高速循環，只等待 0.2 秒就繼續找
+                await asyncio.sleep(0.2)
+            else:
+                # 4 顆都連滿了，才進入省電待命模式
+                await asyncio.sleep(2.0)
 
-        let collision = terrain.checkCollision(squid);
-        let obstacleHit = terrain.checkObstacleCollision(squid);
-
-        if (collision.hit || obstacleHit) {
-            // ★ 強力反彈 (Anti-Stuck) ★
-            squid.vel.x = -15;
-            if(squid.pos.y < height/2) squid.vel.y = 5; else squid.vel.y = -5;
-
-            if (!squid.isInvincible) {
-                squid.takeDamage(); comboCount = 0; shakeAmount = 20;
-                playCollisionSound(); updateHPDisplay();
-                if (squid.hp <= 0) triggerDeath();
-            }
-        }
-        document.getElementById('score-val').innerText = score;
-
-    } else if (gameState === 2) {
-        terrain.display(); squid.updatePhysicsOnly(); squid.display();
-        if (squid.pos.y > height + 100) {
-            fill(255, 50, 50); textSize(60); textAlign(CENTER, CENTER);
-            text("GAME OVER", width/2, height/2 - 20);
-            if (canRestart) {
-                textSize(30); fill(255);
-                let alpha = map(sin(frameCount * 0.1), -1, 1, 100, 255);
-                fill(255, 255, 255, alpha); text("點擊畫面 重新開始", width/2, height/2 + 60);
-            }
-        }
-    } else if (gameState === 3) {
-        fill(0); textSize(60); textAlign(CENTER, CENTER);
-        text("VICTORY!", width/2, height/2 - 40); text("完全制霸", width/2, height/2 + 40);
-        textSize(30); if (frameCount % 60 < 30) text("點擊畫面 重新挑戰", width/2, height/2 + 120);
-        if (random() > 0.5) stars.push(new StarParticle(random(width), random(height)));
-        for (let i = stars.length - 1; i >= 0; i--) { stars[i].update(); stars[i].display(); if (stars[i].finished()) stars.splice(i, 1); }
-    }
-    
-    if (gameState !== 3 && random() > 0.8) particles.push(new Bubble(width, random(height), false));
-    for (let i = particles.length - 1; i >= 0; i--) { particles[i].update(); particles[i].display(); if (particles[i].finished()) particles.splice(i, 1); }
-    if(gameState !== 3) { for (let i = stars.length - 1; i >= 0; i--) { stars[i].update(); stars[i].display(); if (stars[i].finished()) stars.splice(i, 1); } }
-    
-    if (gameState === 1 && comboCount > 0) {
-        let barWidth = map(comboTimer, 0, COMBO_TIME_LIMIT, 0, 200);
-        let hasPearlOnScreen = pearls.some(p => p.pos.x > 0 && p.pos.x < width);
-        noStroke();
-        if (hasPearlOnScreen) fill(255, 255, 0, 200); else fill(255, 255, 255, 100);
-        rect(width/2 - 100, 80, barWidth, 10, 5);
-    }
-    pop();
-}
-
-function screenPosition(x, y) { return x; }
-
-function triggerDeath() {
-    gameState = 2; stopFallingSequence(); playDieSound(); squid.explode();
-    for(let k=0; k<20; k++) { let b = new Bubble(squid.pos.x, squid.pos.y, true); b.vel = p5.Vector.random2D().mult(random(5, 10)); particles.push(b); }
-    canRestart = false; setTimeout(() => { canRestart = true; }, 1500);
-}
-
-function triggerVictory() {
-    gameState = 3; stopFallingSequence(); playVictorySound();
-    canRestart = false; setTimeout(() => { canRestart = true; }, 4000);
-}
-
-function handleInput(e) {
-    if(e && e.cancelable) e.preventDefault();
-    if (gameState === 1) { triggerPlayerAction(1); } // 滑鼠預設 P1
-    else if ((gameState === 2 || gameState === 3) && canRestart) { squid.evolutionLevel = 0; startCountdown(); }
-    return false;
-}
-
-function mousePressed() { if (gameState !== 0) return handleInput(null); }
-function touchStarted() { if (gameState !== 0) return handleInput(null); }
-function windowResized() { resizeCanvas(windowWidth, windowHeight); if(squid) squid.pos.x = width * 0.25; }
-function drawBackground() {
-    let ctx = drawingContext; let gradient = ctx.createLinearGradient(0, 0, 0, height);
-    gradient.addColorStop(0, "#020510"); gradient.addColorStop(1, "#000000");
-    ctx.fillStyle = gradient; ctx.fillRect(0, 0, width, height);
-}
-
-// ==========================================
-//  PART 3: 類別 (保持不變)
-// ==========================================
-class CaveObstacle {
-    constructor(x, y, type, side) {
-        this.pos = createVector(x, y); this.type = type; this.side = side; this.size = 40;
-        this.angle = random(TWO_PI); this.timer = random(100);
-        this.leftEyeSize = random(3, 5); this.rightEyeSize = random(3, 5);
-        this.pupilOffsetLeft = createVector(random(-1, 1), random(-1, 1));
-        this.pupilOffsetRight = createVector(random(-1, 1), random(-1, 1));
-    }
-    update() {
-        this.pos.x -= gameSpeed; this.timer += 0.05;
-        if(frameCount % 20 === 0) { this.pupilOffsetLeft = createVector(random(-1, 1), random(-1, 1)); this.pupilOffsetRight = createVector(random(-1, 1), random(-1, 1)); }
-    }
-    display() {
-        push(); translate(this.pos.x, this.pos.y);
-        if (this.type === 'starfish') {
-            rotate(this.angle + this.timer * 0.5); noStroke(); fill(255, 100, 100);
-            beginShape(); for (let i = 0; i < 5; i++) { let a = TWO_PI * i / 5 - HALF_PI; let r = this.size / 2; vertex(cos(a) * r, sin(a) * r); a += TWO_PI / 10; vertex(cos(a) * r * 0.4, sin(a) * r * 0.4); } endShape(CLOSE); fill(255, 200); ellipse(0, 0, 5, 5);
-        } else if (this.type === 'eel') {
-            let sway = sin(this.timer) * 15; let dir = (this.side === 'top') ? 1 : -1;
-            noFill(); stroke(240); strokeWeight(14);
-            beginShape(); vertex(0, 0); bezierVertex(0, 20*dir, sway, 40*dir, sway*0.5, 70*dir); endShape();
-            noStroke(); fill(50); ellipse(0, 15*dir, 5, 5); ellipse(sway*0.3, 40*dir, 5, 5);
-            fill(240); let headX = sway*0.5; let headY = 70*dir; ellipse(headX, headY, 20, 24);
-            fill(255); ellipse(headX - 5, headY - 2, this.leftEyeSize+2, this.leftEyeSize+2); ellipse(headX + 5, headY + 2, this.rightEyeSize+2, this.rightEyeSize+2);
-            fill(0); ellipse(headX - 5 + this.pupilOffsetLeft.x, headY - 2 + this.pupilOffsetLeft.y, 2, 2); ellipse(headX + 5 + this.pupilOffsetRight.x, headY + 2 + this.pupilOffsetRight.y, 2, 2);
-        }
-        pop();
-    }
-    checkCollision(squid) {
-        let hitDist = this.size/2 + squid.size/2; let offsetY = 0;
-        if (this.type === 'eel') { let dir = (this.side === 'top') ? 1 : -1; offsetY = 70 * dir; }
-        let d = dist(this.pos.x, this.pos.y + offsetY, squid.pos.x, squid.pos.y); return d < hitDist;
-    }
-}
-
-class CaveTerrain {
-    constructor() { this.reset(true); }
-    reset(randomize = false) {
-        if(randomize) this.noiseOffset = random(10000); else this.noiseOffset = 0;
-        this.segments = []; this.obstacles = [];
-        for(let x=0; x<=width; x+=10) this.addSegment(x);
-    }
-    addSegment(x) {
-        let h = this.generateHeight(x); this.segments.push(h);
-        if (random() < 0.05 && x > 400) {
-            let type = random() < 0.5 ? 'starfish' : 'eel'; let side = random() < 0.5 ? 'top' : 'bottom';
-            let y = (side === 'top') ? h.top : h.bottom; let offset = (side === 'top') ? -10 : 10; if (type === 'eel') offset = 0;
-            this.obstacles.push(new CaveObstacle(x, y + offset, type, side));
-        }
-    }
-    generateHeight(x) {
-        if (x < 400) { return { x: x, top: height * 0.2, bottom: height * 0.8 }; }
-        let n = noise(this.noiseOffset); this.noiseOffset += 0.02;
-        let gapSize = map(n, 0, 1, 450, 650);
-        let center = map(noise(this.noiseOffset * 0.5 + 100), 0, 1, 50, height-50);
-        return { x: x, top: center - gapSize/2, bottom: center + gapSize/2 };
-    }
-    update() {
-        for (let s of this.segments) { s.x -= gameSpeed; }
-        if (this.segments[0].x < -10) { this.segments.shift(); }
-        let lastX = this.segments[this.segments.length-1].x;
-        if (lastX < width) { this.addSegment(lastX + 10); }
-        for (let i = this.obstacles.length - 1; i >= 0; i--) {
-            this.obstacles[i].update();
-            if (this.obstacles[i].pos.x < -50) this.obstacles.splice(i, 1);
-        }
-    }
-    display() {
-        fill(20, 30, 40); stroke(0, 255, 255, 50);
-        beginShape(); vertex(0, 0); for (let s of this.segments) vertex(s.x, s.top); vertex(width, 0); endShape(CLOSE);
-        beginShape(); vertex(0, height); for (let s of this.segments) vertex(s.x, s.bottom); vertex(width, height); endShape(CLOSE);
-        for (let o of this.obstacles) o.display();
-    }
-    getCenterY(atX) { return map(noise(this.noiseOffset * 0.5 + 100), 0, 1, 50, height-50); }
-    checkCollision(squid) {
-        for (let s of this.segments) {
-            if (abs(s.x - squid.pos.x) < 10) {
-                let safeZoneTop = s.top; let safeZoneBot = s.bottom;
-                let squidTop = squid.pos.y - squid.size/2 + 5; let squidBot = squid.pos.y + squid.size/2 - 5;
-                if (squidTop < safeZoneTop) return { hit: true, type: 'top', limit: safeZoneTop };
-                if (squidBot > safeZoneBot) return { hit: true, type: 'bottom', limit: safeZoneBot };
-            }
-        }
-        return { hit: false, type: 'none', limit: 0 };
-    }
-    checkObstacleCollision(squid) {
-        for (let o of this.obstacles) { if (o.checkCollision(squid)) return true; } return false;
-    }
-}
-
-class Pearl {
-    constructor(x, y) { this.pos = createVector(x, y); this.r = 20; }
-    update() { this.pos.x -= gameSpeed; }
-    display() { noStroke(); fill(255, 255, 200, 100); ellipse(this.pos.x, this.pos.y, this.r * 2.5); fill(255); ellipse(this.pos.x, this.pos.y, this.r); }
-    hits(squid) { let d = dist(this.pos.x, this.pos.y, squid.pos.x, squid.pos.y); return d < this.r + squid.size; }
-    offscreen() { return this.pos.x < -50; }
-}
-
-class TechSquid {
-    constructor(x, y) { this.reset(x, y); this.size = 60; this.baseColor = color(0, 255, 255); this.evolutionLevel = 0; }
-    reset(x, y) {
-        this.pos = createVector(x, y); this.vel = createVector(0, 0); this.gravity = 0.35; this.drag = 0.95;
-        this.bodyColor = this.baseColor; this.squish = 1.0; this.tentaclePhase = 0; this.eyeSize = 15;
-        this.hp = 3; this.invincibleTimer = 0; this.isInvincible = false; this.evolutionLevel = 0;
-    }
-    setEvolution(level) {
-        this.evolutionLevel = level;
-        this.size = 60 + (min(level, 5) * 5);
-    }
-    evolveNext() { this.setEvolution(min(this.evolutionLevel + 1, 5)); }
-    takeDamage() { this.hp--; this.invincibleTimer = 90; this.isInvincible = true; this.bodyColor = color(255, 50, 50); }
-    jump(power) {
-        this.vel.y = -9; this.squish = 0.6; if(!this.isInvincible) this.updateColorByLevel();
-        this.eyeSize = 25; for(let i=0; i<5; i++) particles.push(new Bubble(this.pos.x, this.pos.y + 30, true));
-    }
-    explode() { this.vel.y = -15; this.vel.x = random(-2, 2); this.bodyColor = color(100, 100, 100); }
-    updatePhysicsOnly() {
-        this.vel.y += this.gravity; this.pos.add(this.vel); this.tentaclePhase += 0.05; this.vel.x *= 0.99; this.pos.x += this.vel.x;
-    }
-    updateColorByLevel() {
-        if (this.evolutionLevel >= 5) this.bodyColor = color(255, 215, 0);
-        else if (this.evolutionLevel === 4) this.bodyColor = color(50, 50, 100);
-        else if (this.evolutionLevel === 3) this.bodyColor = color(100, 200, 100);
-        else if (this.evolutionLevel === 2) this.bodyColor = color(200, 200, 255);
-        else if (this.evolutionLevel === 1) this.bodyColor = color(255, 150, 150);
-        else this.bodyColor = this.baseColor;
-    }
-    update() {
-        this.vel.y += this.gravity; this.vel.mult(this.drag); this.pos.add(this.vel);
-        this.squish = lerp(this.squish, 1.0 + sin(frameCount*0.1)*0.05, 0.1);
-        if (this.isInvincible) {
-            this.invincibleTimer--;
-            if (frameCount % 10 < 5) this.bodyColor = color(255, 100, 100, 150); else this.updateColorByLevel();
-            if (this.invincibleTimer <= 0) { this.isInvincible = false; this.updateColorByLevel(); }
-        } else {
-            if(this.evolutionLevel >= 5) this.bodyColor = lerpColor(color(255, 215, 0), color(255, 255, 100), sin(frameCount*0.2)*0.5 + 0.5);
-            else this.updateColorByLevel();
-        }
-        let targetX = width * 0.25;
-        let diff = targetX - this.pos.x;
-        this.vel.x += diff * 0.01; this.vel.x *= 0.9;
-        this.eyeSize = lerp(this.eyeSize, 15, 0.1); this.tentaclePhase += 0.1;
-    }
-    display() {
-        push(); translate(this.pos.x, this.pos.y);
-        if (gameState === 2) rotate(frameCount * 0.2); else rotate(this.vel.y * 0.02);
-        scale(1, this.squish);
-        let level = this.evolutionLevel; if (level > 5) level = 5;
-        switch(level) {
-            case 0: this.drawSquid(); break; case 1: this.drawCuttlefish(); break; case 2: this.drawJellyfish(); break;
-            case 3: this.drawSeahorse(); break; case 4: this.drawAnglerfish(); break; case 5: this.drawGoldenSquid(); break;
-            default: this.drawSquid();
-        }
-        if (level >= 5) { noFill(); stroke(255, 215, 0, 100); strokeWeight(2); let aura = 80 + sin(frameCount * 0.2) * 10; ellipse(0, 0, aura, aura); }
-        pop();
-    }
-    drawSquid() {
-        noFill(); strokeWeight(4); for(let i=-2; i<=2; i++) { stroke(red(this.bodyColor), green(this.bodyColor), blue(this.bodyColor), 200); beginShape(); for(let j=0; j<8; j++) { let wave = sin(this.tentaclePhase + i + j*0.5) * j*1.5; vertex(i*10 + wave, 30 + j*8); } endShape(); }
-        noStroke(); fill(red(this.bodyColor), green(this.bodyColor), blue(this.bodyColor), 150); arc(0, 0, this.size*1.8, this.size*1.8, PI, TWO_PI); rect(-this.size*0.9, 0, this.size*1.8, 10); this.drawEyes(-20, -10);
-    }
-    drawCuttlefish() {
-        noFill(); strokeWeight(4); for(let i=-1; i<=1; i++) { stroke(red(this.bodyColor), green(this.bodyColor), blue(this.bodyColor), 200); line(i*10, 40, i*15, 70); }
-        noStroke(); fill(red(this.bodyColor), green(this.bodyColor), blue(this.bodyColor), 150); beginShape(); vertex(0, -50); vertex(30, 0); vertex(0, 50); vertex(-30, 0); endShape(CLOSE); this.drawEyes(-15, -10);
-    }
-    drawJellyfish() {
-        noFill(); strokeWeight(2); for(let i=-3; i<=3; i++) { stroke(255, 100); let wave = sin(this.tentaclePhase + i*0.5 + frameCount*0.1) * 10; line(i*8, 10, i*10 + wave, 60); }
-        noStroke(); fill(200, 200, 255, 100); arc(0, 0, 60, 50, PI, TWO_PI); this.drawEyes(-15, -10);
-    }
-    drawSeahorse() {
-        noFill(); stroke(this.bodyColor); strokeWeight(18); beginShape(); vertex(0, -35); bezierVertex(20, -35, 25, -10, 5, 10); bezierVertex(-25, 25, -25, 50, 15, 60); endShape();
-        strokeWeight(8); line(0, -30, -25, -25); noStroke(); fill(red(this.bodyColor), green(this.bodyColor), blue(this.bodyColor), 150); triangle(-10, 0, -25, 10, -10, 20); this.drawEyes(5, -25);
-    }
-    drawAnglerfish() {
-        stroke(255); strokeWeight(2); noFill(); beginShape(); vertex(0, -25); bezierVertex(10, -40, 20, -40, 35, -20); endShape(); noStroke(); fill(255, 255, 0); ellipse(35, -20, 15); fill(255, 255, 0, 100); ellipse(35, -20, 30);
-        fill(this.bodyColor); ellipse(0, 0, 80, 70); fill(this.bodyColor); arc(0, 20, 70, 40, 0, PI); fill(255); triangle(-20, 25, -15, 45, -10, 25); triangle(10, 25, 15, 45, 20, 25); triangle(0, 25, 5, 40, 10, 25); this.drawEyes(-15, -10);
-    }
-    drawGoldenSquid() {
-        this.drawSquid(); fill(0); noStroke(); rect(-35, -15, 30, 15, 2); rect(5, -15, 30, 15, 2); rect(-5, -10, 10, 3); fill(255, 100); rect(-30, -12, 10, 5); rect(10, -12, 10, 5); fill(255, 215, 0); stroke(255); strokeWeight(2); beginShape(); vertex(-20, -35); vertex(-10, -50); vertex(0, -35); vertex(10, -50); vertex(20, -35); endShape(CLOSE);
-    }
-    drawEyes(x, y) { fill(255); noStroke(); ellipse(x, y, this.eyeSize+5); ellipse(-x, y, this.eyeSize+5); fill(0); ellipse(x, y + this.vel.y*0.2, 5); ellipse(-x, y + this.vel.y*0.2, 5); }
-}
-
-class Bubble {
-    constructor(x, y, burst) { this.pos = createVector(x, y); this.isBurst = burst; if(burst) { this.vel = p5.Vector.random2D().mult(random(2, 5)); this.size = random(5, 10); this.alpha = 255; } else { this.vel = createVector(-gameSpeed * random(0.5, 1.5), random(-1, 1)); this.size = random(2, 5); this.alpha = random(50, 150); } }
-    update() { this.pos.add(this.vel); if(this.isBurst) { this.size *= 0.9; this.alpha -= 10; } }
-    display() { if(this.alpha <= 0) return; noStroke(); fill(200, 255, 255, this.alpha); ellipse(this.pos.x, this.pos.y, this.size); }
-    finished() { return this.alpha < 0 || this.pos.x < 0; }
-}
-
-class StarParticle {
-    constructor(x, y) { this.pos = createVector(x, y); this.vel = p5.Vector.random2D().mult(random(5, 10)); this.acc = createVector(0, 0.2); this.size = random(10, 20); this.alpha = 255; this.rotation = random(TWO_PI); this.rotSpeed = random(-0.2, 0.2); }
-    update() { this.vel.add(this.acc); this.pos.add(this.vel); this.alpha -= 5; this.rotation += this.rotSpeed; }
-    display() { if(this.alpha <= 0) return; push(); translate(this.pos.x, this.pos.y); rotate(this.rotation); noStroke(); fill(255, 215, 0, this.alpha); beginShape(); for (let i = 0; i < 5; i++) { let angle = TWO_PI * i / 5 - HALF_PI; let x = cos(angle) * this.size; let y = sin(angle) * this.size; vertex(x, y); angle += TWO_PI / 10; let x2 = cos(angle) * (this.size * 0.4); let y2 = sin(angle) * (this.size * 0.4); vertex(x2, y2); } endShape(CLOSE); pop(); }
-    finished() { return this.alpha < 0; }
-}
-</script>
-</body>
-</html>
+if __name__ == "__main__":
+    try: asyncio.run(manager())
+    except KeyboardInterrupt: print("\n已停止。")
